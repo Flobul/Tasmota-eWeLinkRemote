@@ -6,7 +6,7 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 
 ## Installation
 
-1. Prerequisites:
+### Prerequisites:
    - ESP32 with Tasmota installed
    - Berry activated
    - Tasmota Mi32-bluetooth version
@@ -15,13 +15,38 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
    SetOption115 1
    ```
 
-2. Module installation:
+### Module installation:
+
+#### Manual installation 
    - Download the `remote.be` file
    - Copy it to your ESP32 via Tasmota web interface (Console -> Manage File System)
    - Enable it:
    ```
    br load('remote.be')
    ```
+
+#### Automatic installation 
+   - Paste this code in your ESP32 via Tasmota web interface (Console -> Berry Scripting Console)
+   ```
+  import path
+  def start_eweremote_setup()
+    var cl = webclient()
+    var url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/remote.be'
+    cl.begin(url)
+    var r = cl.GET()
+    if r != 200
+      print('error getting remote.be')
+      return false
+    end
+    var s = cl.get_string()
+    cl.close()
+    var f = open('remote.be', 'w')
+    f.write(s)
+    f.close()
+    load('remote.be')
+  end
+   ```
+start_eweremote_setup()
 
 ## Configuration
 
