@@ -45,8 +45,8 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
     f.close()
     load('remote.be')
   end
+  start_eweremote_setup()
    ```
-start_eweremote_setup()
 
 ## Configuration
 
