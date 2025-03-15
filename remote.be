@@ -1,9 +1,6 @@
 # This code is for the eWeLink BLE remote control
-# It listens for BLE advertisements from the remote and parses the button presses
-# It can be used to trigger actions in Tasmota based on the button presses
-# It also sends MQTT messages with the button press information
-# It can be configured to use a different MQTT topic for each remote or a single topic for all remotes
 # Created by @Flobul on 2025-03-10
+# Version 0.1.0
 
 import string
 import json
@@ -110,52 +107,6 @@ class ewe_helpers
         return config['devices'] && config['devices'].contains(deviceId)
     end
 
-    static def list_bindings()
-        var config = ewe_helpers.read_config()
-        var result = []
-        if !config['devices'] return result end
-        
-        for deviceId: config['devices'].keys()
-            var device = config['devices'][deviceId]
-            if device.contains('bindings') && size(device['bindings']) > 0
-                for button_key: device['bindings'].keys()
-                    var relay = device['bindings'][button_key]
-                    # Extrait le numéro du bouton de la clé (ex: 'button1' -> '1')
-                    var button = string.split(button_key, 'button')[1]
-                    result.push(format("Device %s: Button %s -> Relay %d", 
-                                     deviceId, button, relay))
-                end
-            end
-        end
-        return result
-    end
-
-    static def set_selected_actions(deviceId, button, actions)
-        var config = ewe_helpers.read_config()
-        if !config['devices'] || !config['devices'].contains(deviceId) return false end
-        
-        var device = config['devices'][deviceId]
-        if !device.contains('selected_actions')
-            device['selected_actions'] = {}
-        end
-        device['selected_actions']['button' + str(button)] = actions
-        ewe_helpers.write_config(config)
-        return true
-    end
-
-    static def get_selected_actions(deviceId, button)
-        var config = ewe_helpers.read_config()
-        if !config['devices'] || !config['devices'].contains(deviceId) return [] end
-        
-        var device = config['devices'][deviceId]
-        if !device.contains('selected_actions') return [] end
-        
-        var button_key = 'button' + str(button)
-        return device['selected_actions'].contains(button_key) ? 
-               device['selected_actions'][button_key] : []
-    end
-
-
     static def get_button_bindings(deviceId, button)
         var config = ewe_helpers.read_config()
         if !config['devices'] || !config['devices'].contains(deviceId) return [] end
@@ -227,7 +178,7 @@ class ewe_remote : Driver
         126, 29, 56, 110, 228, 6, 170, 121, 50, 149, 102,
         181, 116, 13, 219, 140, 233, 1, 42
     ]
-    static button_actions = ['simple', 'double', 'long']
+    static button_actions = ['single', 'double', 'hold']
     static types = {0x46: "S-MATE2", 0x47: "R5"}
     var last_data
     var button_history  # Ajout de la variable button_history
@@ -440,121 +391,6 @@ class ewe_remote : Driver
         end
     end
 
-    def web_device_config()
-        import webserver
-        var deviceId = webserver.arg('id')
-        if !deviceId || !ewe_helpers.is_device_registered(deviceId)
-            webserver.content_start()
-            webserver.content_send('<p>Invalid device</p>')
-            webserver.content_button(col_text)
-            webserver.content_stop()
-            return
-        end
-        
-        var device_type = g_state.type
-        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
-        var power_count = size(tasmota.get_power())
-        
-        webserver.content_start()
-        webserver.content_send('<fieldset><legend><b>&nbsp;Remote Configuration&nbsp;</b></legend>')
-        webserver.content_send(format('<div style="margin-bottom:15px"><b>Device ID:</b> %s<br><b>Type:</b> %s</div>', deviceId, device_type))
-        
-        # Configuration par bouton
-        for btn: 1..num_buttons
-            webserver.content_send(format(
-                '<div class="card" style="padding:10px; margin:10px 0">' ..
-                '<div style="font-weight:bold; margin-bottom:10px">Button %d Configuration</div>',
-                btn
-            ))
-            
-            # Affichage des bindings actuels pour ce bouton
-            var bindings = ewe_helpers.get_button_bindings(deviceId, btn)
-            if size(bindings) > 0
-                webserver.content_send('<div style="margin-bottom:10px"><b>Current bindings:</b></div>')
-                for binding: bindings
-                    webserver.content_send(format(
-                        '<div style="background:%s; color:white; padding:5px; margin:5px 0; border-radius:3px; display:flex; justify-content:space-between; align-items:center">' ..
-                        '<span>Relay %d [%s]</span>' ..
-                        '<button onclick="fetch(\'cm?cmnd=EweRemoveBinding %s_%d_%d\').then(()=>window.location.reload())" ' ..
-                        'style="background:none; border:none; color:white; cursor:pointer; font-size:16px">&times;</button>' ..
-                        '</div>',
-                        col_button_success,
-                        binding['relay'],
-                        binding['actions'].concat(','),
-                        deviceId, btn, binding['relay']
-                    ))
-                end
-            end
-            
-            # Interface d'ajout de binding
-            if power_count > 0
-                webserver.content_send(
-                    '<div style="margin-top:15px">' ..
-                    '<div style="margin-bottom:5px"><b>Add new binding:</b></div>' ..
-                    '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">' ..
-                    
-                    # Sélection du relais
-                    '<div style="min-width:100px">' ..
-                    '<select id="relay' + str(btn) + '" style="width:100%">'
-                )
-                
-                for relay: 1..power_count
-                    webserver.content_send(format(
-                        '<option value="%d">Relay %d</option>',
-                        relay, relay
-                    ))
-                end
-                
-                webserver.content_send('</select></div>')
-                
-                # Cases à cocher pour les actions
-                webserver.content_send(
-                    '<div style="display:flex; gap:15px">' ..
-                    '<label><input type="checkbox" id="simple' + str(btn) + '"> Simple</label>' ..
-                    '<label><input type="checkbox" id="double' + str(btn) + '"> Double</label>' ..
-                    '<label><input type="checkbox" id="hold' + str(btn) + '"> Hold</label>' ..
-                    '</div>'
-                )
-                
-                # Bouton d'ajout
-                webserver.content_send(format(
-                    '<button onclick="addBinding(%d)" ' ..
-                    'style="background-color: %s; color: white; border:0; border-radius:0.3rem; padding:5px 10px; cursor:pointer; transition-duration:0.4s" ' ..
-                    'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
-                    'onmouseout="this.style.backgroundColor=\'%s\'">Bind</button>' ..
-                    '</div>',
-                    btn, col_button, col_button_hover, col_button
-                ))
-            end
-            
-            webserver.content_send('</div>')  # Fin de la carte du bouton
-        end
-        
-        # JavaScript pour gérer les bindings
-        webserver.content_send(format(
-            '<script>' ..
-            'function addBinding(btn) {' ..
-            '  const relay = document.getElementById("relay"+btn).value;' ..
-            '  const actions = [];' ..
-            '  if(document.getElementById("simple"+btn).checked) actions.push("simple");' ..
-            '  if(document.getElementById("double"+btn).checked) actions.push("double");' ..
-            '  if(document.getElementById("hold"+btn).checked) actions.push("hold");' ..
-            '  if(actions.length === 0) {' ..
-            '    alert("Please select at least one action");' ..
-            '    return;' ..
-            '  }' ..
-            '  fetch("cm?cmnd=EweAddBinding %s_"+btn+"_"+relay+"_"+actions.join(","))' ..
-            '    .then(() => window.location.reload());' ..
-            '}' ..
-            '</script>',
-            deviceId
-        ))
-        
-        webserver.content_send('</fieldset>')
-        webserver.content_button(col_text)
-        webserver.content_stop()
-    end
-
     def web_add_main_button()
         import webserver
         webserver.content_send(
@@ -572,8 +408,6 @@ class ewe_remote : Driver
         
         webserver.content_start("Remote Configuration")
         webserver.content_send_style()
-        
-        webserver.content_send('<div style="text-align:center"><h3>Remote Configuration</h3></div>')
         
         var config = ewe_helpers.read_config()
         if !config return nil end
@@ -597,7 +431,7 @@ class ewe_remote : Driver
             var num_buttons = device_type == 'S-MATE2' ? 3 : 6
 
             webserver.content_send(format(
-                '<fieldset class="card" style="padding:10px; margin:10px 0; background-color: %s;">' ..
+                '<fieldset class="card" style="background-color: %s;">' ..
                 '<legend><b>Remote %s (%s)</b></legend>',
                 col_background, deviceId, device_type
             ))
@@ -605,7 +439,7 @@ class ewe_remote : Driver
             # Configuration des boutons
             for btn: 1..num_buttons
                 webserver.content_send(format(
-                    '<div style="margin:5px 0; padding:5px; background:rgba(0,0,0,0.05)">' ..
+                    '<div style="background:rgba(0,0,0,0.05)">' ..
                     '<div>Button %d</div>',
                     btn
                 ))
@@ -618,12 +452,12 @@ class ewe_remote : Driver
                     var bindings = current_bindings[button_key]
                     for binding: bindings
                         webserver.content_send(format(
-                            '<div style="background:%s; color:white; padding:5px; width:50%%; border-radius:3px; display:inline-flex; justify-content:space-between; align-items:center; transition-duration:0.4s" ' ..
+                            '<div style="background:%s; color:white; border-radius:3px; display:inline-flex; justify-content:space-between; align-items:center; transition-duration:0.4s" ' ..
                             'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
                             'onmouseout="this.style.backgroundColor=\'%s\'">' ..
                             '<span>Relay %d [%s]</span>' ..
                             '<button onclick="fetch(\'cm?cmnd=EweRemoveBinding %s_%d_%d\').then(()=>window.location.reload())" ' ..
-                            'style="background:none; border:none; color:white; cursor:pointer; font-size:16px">' ..
+                            'style="background:none; border:none; color:white; cursor:pointer;width: 20px">' ..
                             '×</button>' ..
                             '</div>',
                             col_button_success,
@@ -639,7 +473,7 @@ class ewe_remote : Driver
                 # Interface d'ajout
                 if power_count > 0
                     webserver.content_send(
-                        '<div style="margin-top:5px">' ..
+                        '<div>' ..
                         '<select id="relay' + str(btn) + '_' + deviceId + '" style="width:auto; margin-right:5px">'
                     )
                     
@@ -653,7 +487,7 @@ class ewe_remote : Driver
                     webserver.content_send('</select>')
                     
                     webserver.content_send(
-                        '<label style="margin:0 5px"><input type="checkbox" id="simple' + str(btn) + '_' + deviceId + '" checked> Simple</label>' ..  # 'Simple' coché par défaut
+                        '<label style="margin:0 5px"><input type="checkbox" id="single' + str(btn) + '_' + deviceId + '" checked> Single</label>' ..  # 'Single' coché par défaut
                         '<label style="margin:0 5px"><input type="checkbox" id="double' + str(btn) + '_' + deviceId + '"> Double</label>' ..
                         '<label style="margin:0 5px"><input type="checkbox" id="hold' + str(btn) + '_' + deviceId + '"> Hold</label>' ..
                         format('<button onclick="addBinding(\'%s\',%d)" ' ..
@@ -688,7 +522,7 @@ class ewe_remote : Driver
             'function addBinding(deviceId, btn) {' ..
             '  const relay = document.getElementById("relay"+btn+"_"+deviceId).value;' ..
             '  const actions = [];' ..
-            '  if(document.getElementById("simple"+btn+"_"+deviceId).checked) actions.push("simple");' ..
+            '  if(document.getElementById("single"+btn+"_"+deviceId).checked) actions.push("single");' ..
             '  if(document.getElementById("double"+btn+"_"+deviceId).checked) actions.push("double");' ..
             '  if(document.getElementById("hold"+btn+"_"+deviceId).checked) actions.push("hold");' ..
             '  if(actions.length === 0) {' ..
@@ -808,35 +642,6 @@ def cmd_set_topic_mode(cmd, idx, payload, payload_json)
     else
         tasmota.resp_cmnd_failed()
     end
-end
-
-def web_config()
-    import webserver
-    webserver.content_start()
-    webserver.content_send('<fieldset><legend><b>&nbsp;EWE Remote Configuration&nbsp;</b></legend>')
-    
-    # Liste des télécommandes enregistrées
-    var config = ewe_helpers.read_config()
-    if !config['devices'] || size(config['devices']) == 0
-        webserver.content_send('<p>No devices registered</p>')
-    else
-        for deviceId: config['devices'].keys()
-            webserver.content_send(format('<div class="card" style="padding:10px; margin:10px 0">' ..
-                '<div style="font-weight:bold">Remote %s</div>' ..
-                '<div style="margin-top:10px">' ..
-                '<button onclick="window.location=\'eweconf?id=%s\'" ' ..
-                'style="background:%s; color:white; border:none; padding:5px 10px; border-radius:0.3rem; cursor:pointer; transition-duration:0.4s" ' ..
-                'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
-                'onmouseout="this.style.backgroundColor=\'%s\'">Configure</button>' ..
-                '</div></div>',
-                deviceId, deviceId, col_button, col_button_hover, col_button
-            ))
-        end
-    end
-    
-    webserver.content_send('</fieldset>')
-    webserver.content_button(col_text)
-    webserver.content_stop()
 end
 
 # Initialisation
