@@ -1,6 +1,7 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Version 0.1.0
+# Modified by @Flobul on 2025-03-16
+# Version 0.2.0
 
 import string
 import json
@@ -27,16 +28,19 @@ class State
 end
 cbuf = bytes(-64)
 
+# Global state variable
 var g_state = State()
-var col_text = tasmota.webcolor(1)                  # Couleur du texte
-var col_background = tasmota.webcolor(2)            # Couleur de fond des cards
-var col_button_default = tasmota.webcolor(3)        # Couleur des boutons normaux
-var col_button = tasmota.webcolor(10)               # Couleur des boutons menu
-var col_button_hover = tasmota.webcolor(11)         # Couleur des boutons menu
-var col_button_delete = tasmota.webcolor(12)        # Couleur du bouton de suppression
-var col_button_delete_hover = tasmota.webcolor(13)  # Couleur du bouton de suppression
-var col_button_success = tasmota.webcolor(14)       # Couleur du bouton de validation
-var col_button_success_hover = tasmota.webcolor(15) # Couleur du bouton de validation
+
+# Color variables for Tasmota web interface
+var col_text = tasmota.webcolor(1)                  # Text color
+var col_background = tasmota.webcolor(2)            # Background color of cards
+var col_button_default = tasmota.webcolor(3)        # Default button color
+var col_button = tasmota.webcolor(10)               # Menu button color
+var col_button_hover = tasmota.webcolor(11)         # Menu button hover color
+var col_button_delete = tasmota.webcolor(12)        # Delete button color
+var col_button_delete_hover = tasmota.webcolor(13)  # Delete button hover color
+var col_button_success = tasmota.webcolor(14)       # Success button color
+var col_button_success_hover = tasmota.webcolor(15) # Success button hover color
 
 def getmac(cter)
     var mac = tasmota.wifi()['mac']
@@ -52,13 +56,26 @@ end
 
 class ewe_helpers
     static def read_config()
+        var default_config = {
+            'devices': {},
+            'mqtt': {
+                'topic_mode': 0,
+                'topic_template': ''
+            },
+            'settings': {
+                'stats_enabled': false
+            }
+        }
+        
         try
             var f = open("ewe_config.json", "r")
             var config = json.load(f.read())
             f.close()
             return config
         except .. 
-            return {'devices':{}, 'topic_mode': 0}
+            # The file does not exist, create it with the default config
+            ewe_helpers.write_config(default_config)
+            return default_config
         end
     end
 
@@ -90,6 +107,23 @@ class ewe_helpers
     static def get_topic_mode()
         var config = ewe_helpers.read_config()
         return config['topic_mode']
+    end
+
+    static def set_topic_config(mode, template)
+        var config = ewe_helpers.read_config()
+        if !config['mqtt'] config['mqtt'] = {} end
+        config['mqtt']['topic_mode'] = mode
+        config['mqtt']['topic_template'] = template ? template : ''
+        ewe_helpers.write_config(config)
+    end
+    
+    static def get_topic_config()
+        var config = ewe_helpers.read_config()
+        if !config['mqtt'] return {'mode': 0, 'template': ''} end
+        return {
+            'mode': config['mqtt'].find('topic_mode', 0),
+            'template': config['mqtt'].find('topic_template', '')
+        }
     end
 
     static def remove_device(deviceId)
@@ -169,6 +203,76 @@ class ewe_helpers
         end
         return false
     end
+
+    static def set_stats_enabled(enabled)
+        var config = ewe_helpers.read_config()
+        if !config['settings'] config['settings'] = {} end
+        config['settings']['stats_enabled'] = enabled
+        ewe_helpers.write_config(config)
+    end
+    
+    static def is_stats_enabled()
+        var config = ewe_helpers.read_config()
+        if !config['settings'] return false end
+        return config['settings'].find('stats_enabled', false)
+    end
+        
+    static def update_stats(deviceId, button, action)
+        if !ewe_helpers.is_stats_enabled() return end
+        
+        var config = ewe_helpers.read_config()
+        if !config.contains('stats') config['stats'] = {} end
+        if !config['stats'].contains(deviceId) config['stats'][deviceId] = {} end
+        
+        var button_key = 'button' + str(button)
+        if !config['stats'][deviceId].contains(button_key)
+            # Initialisation des tableaux hourly et daily
+            var hourly = []
+            var daily = []
+            for i:0..23 hourly.push(0) end
+            for i:0..6 daily.push(0) end
+            
+            config['stats'][deviceId][button_key] = {
+                'total_clicks': 0,
+                'first_used': tasmota.rtc()['local'],
+                'last_used': tasmota.rtc()['local'],
+                'actions': {},
+                'hourly': hourly,
+                'daily': daily
+            }
+        end
+        
+        # Mise à jour des statistiques
+        var stats = config['stats'][deviceId][button_key]
+        stats['total_clicks'] += 1
+        stats['last_used'] = tasmota.rtc()['local']
+        
+        if !stats['actions'].contains(action) stats['actions'][action] = 0 end
+        stats['actions'][action] += 1
+        
+        # Mise à jour des distributions
+        var hour = int(tasmota.strftime('%H', tasmota.rtc()['local']))
+        var day = int(tasmota.strftime('%w', tasmota.rtc()['local']))
+        if hour >= 0 && hour < 24 stats['hourly'][hour] += 1 end
+        if day >= 0 && day < 7 stats['daily'][day] += 1 end
+        
+        ewe_helpers.write_config(config)
+    end
+
+    static def get_stats(deviceId, button)
+        if !ewe_helpers.is_stats_enabled()
+            return {'error': 'Statistics are disabled. Use EweStats ON to enable them'}
+        end
+        
+        var config = ewe_helpers.read_config()
+        if !config.contains('stats') return nil end
+        if !config['stats'].contains(deviceId) return nil end
+        
+        var button_key = 'button' + str(button)
+        if !config['stats'][deviceId].contains(button_key) return nil end
+        
+        return config['stats'][deviceId][button_key]
+    end
 end
 
 class ewe_remote : Driver
@@ -181,7 +285,7 @@ class ewe_remote : Driver
     static button_actions = ['single', 'double', 'hold']
     static types = {0x46: "S-MATE2", 0x47: "R5"}
     var last_data
-    var button_history  # Ajout de la variable button_history
+    var button_history
 
     def init()
         import BLE
@@ -189,7 +293,7 @@ class ewe_remote : Driver
         var cbp = cb.gen_cb(/svc,manu->self.ble_cb(svc,manu))
         BLE.adv_cb(cbp,cbuf)
         self.last_data = bytes('')
-        self.button_history = {}  # Initialisation de button_history
+        self.button_history = {}
         tasmota.add_fast_loop(/-> BLE.loop())
     end
 
@@ -205,16 +309,43 @@ class ewe_remote : Driver
     end
 
     def get_mqtt_topic(device_id)
-        if ewe_helpers.get_topic_mode() == 1
-            return "tele/tasmota_ble/" + device_id
-        else
+        var config = ewe_helpers.get_topic_config()
+        var mode = config['mode']
+        var template = config['template']
+        var prefix = tasmota.cmd('Prefix', true)['Prefix3']
+        
+        if mode == 0
+            # Format Tasmota standard
             var macFormatted = getmac(6)
             var fullTopic = string.replace(string.replace(
                 tasmota.cmd('FullTopic', true)['FullTopic'],
                 '%topic%', tasmota.cmd('Topic', true)['Topic']),
-                '%prefix%', tasmota.cmd('Prefix', true)['Prefix3'])
+                '%prefix%', prefix)
             return string.replace(fullTopic, '%06X', macFormatted) + 'SWITCH'
+        elif mode == 1
+            # Format simplifié
+            return format("%s/tasmota_ble/%s", prefix, device_id)
+        elif mode == 2
+            # Format avec type d'appareil
+            return format("%s/ewelink_%s/%s", prefix, g_state.type.tolower(), device_id)
+        elif mode == 3 && template != ''
+            # Format personnalisé
+            var replacements = {
+                '%prefix%': prefix,
+                '%topic%': tasmota.cmd('Topic', true)['Topic'],
+                '%deviceid%': device_id,
+                '%type%': g_state.type,
+                '%mac%': getmac(0),
+                '%shortmac%': getmac(6)
+            }
+            var result = template
+            for key: replacements.keys()
+                result = string.replace(result, key, replacements[key])
+            end
+            return result
         end
+        # Mode par défaut si invalide
+        return format("%s/tasmota_ble/%s", prefix, device_id)
     end
 
     def test_button(d)
@@ -248,6 +379,8 @@ class ewe_remote : Driver
     def parse(d, RSSI, device_type, sequence)
         var result = self.test_button(d)
         if !result return end
+
+        ewe_helpers.update_stats(result['device_id'], result['button'], result['action'])
 
         var timestamp = tasmota.rtc()['local']
         
@@ -628,31 +761,90 @@ def cmd_remove_binding(cmd, idx, payload, payload_json)
 end
 
 def cmd_set_topic_mode(cmd, idx, payload, payload_json)
-    if payload == ''
-        # Si pas d'argument, renvoie la valeur actuelle
-        var current_mode = ewe_helpers.get_topic_mode()
-        tasmota.resp_cmnd_str(str(current_mode))
+    var parts = string.split(payload, ' ')
+    var mode = 0
+    var template = ''
+    
+    if size(parts) > 0
+        mode = int(parts[0])
+        if size(parts) > 1
+            template = string.split(payload, ' ', 2)[1]
+        end
+    end
+    
+    if mode < 0 || mode > 3
+        tasmota.resp_cmnd_str('Invalid mode (0-3)')
         return
     end
     
-    var mode = int(payload)
-    if mode == 0 || mode == 1
-        ewe_helpers.set_topic_mode(mode)
-        tasmota.resp_cmnd_str(str(mode))  # Utilise resp_cmnd_str pour le format correct
-    else
-        tasmota.resp_cmnd_failed()
+    if mode == 3 && template == ''
+        tasmota.resp_cmnd_str('Template required for mode 3. Available variables: %prefix%, %topic%, %deviceid%, %type%, %mac%, %shortmac%')
+        return
     end
+    
+    ewe_helpers.set_topic_config(mode, template)
+    
+    tasmota.resp_cmnd(format("{\"Mode\":%d,\"Template\":\"%s\"}", mode, template))
 end
 
-# Initialisation
+def cmd_show_stats(cmd, idx, payload, payload_json)
+    var parts = string.split(payload, '_')
+    if size(parts) != 2
+        tasmota.resp_cmnd_str('Invalid format. Use: deviceId_button')
+        return
+    end
+    
+    var stats = ewe_helpers.get_stats(parts[0], int(parts[1]))
+    if !stats
+        tasmota.resp_cmnd_str('No statistics available')
+        return
+    end
+    
+    if stats.contains('error')
+        tasmota.resp_cmnd_str(stats['error'])
+        return
+    end
+    
+    tasmota.resp_cmnd(format(
+        "{\"total\":%d," ..
+        "\"first_used\":\"%s\"," ..
+        "\"last_used\":\"%s\"," ..
+        "\"actions\":%s," ..
+        "\"hourly\":%s," .. 
+        "\"daily\":%s}",
+        stats['total_clicks'],
+        tasmota.strftime('%Y-%m-%d %H:%M:%S', stats['first_used']),
+        tasmota.strftime('%Y-%m-%d %H:%M:%S', stats['last_used']),
+        json.dump(stats['actions']),
+        json.dump(stats['hourly']),
+        json.dump(stats['daily'])
+    ))
+end
+
+def cmd_set_stats(cmd, idx, payload, payload_json)
+    if payload == ''
+        # If no argument, return the current state
+        var enabled = ewe_helpers.is_stats_enabled()
+        tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
+        return
+    end
+    
+    var enabled = payload == '1' || payload.toupper() == 'ON'
+    ewe_helpers.set_stats_enabled(enabled)
+    tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
+end
+
+# Initialization
 ewe = ewe_remote()
 tasmota.add_driver(ewe)
 
 tasmota.add_cmd('EweAddDevice', cmd_add_device)
-tasmota.add_cmd('EweTopic', cmd_set_topic_mode)
 tasmota.add_cmd('EweRemoveDevice', cmd_remove_device)
+tasmota.add_cmd('EweTopicMode', cmd_set_topic_mode)
 tasmota.add_cmd('EweAddBinding', cmd_add_binding)
 tasmota.add_cmd('EweRemoveBinding', cmd_remove_binding)
+tasmota.add_cmd('EweShowStats', cmd_show_stats)
+tasmota.add_cmd('EweStats', cmd_set_stats)
 
-# Ajout du gestionnaire de page web pour la configuration
+# Add the web page handler for configuration
 ewe.web_add_handler()

@@ -100,13 +100,54 @@ EweRemoveBinding <deviceId>_<button>_<relay>
 ```
 
 #### MQTT Configuration
-
 ```
 # Configure MQTT topic format
-EweTopic <mode>
+EweTopicMode <mode> [template]
+
+# Available modes:
 # mode = 0: Standard Tasmota format (default)
-# mode = 1: Simplified format tele/tasmota_ble/<deviceId>
+# mode = 1: Simplified format %prefix%/tasmota_ble/<deviceId>
+# mode = 2: Format with type %prefix%/ewelink_<type>/<deviceId>
+# mode = 3: Custom format (requires template)
+
+# Available template variables:
+# %prefix% : Tasmota prefix (tele, stat, cmnd)
+# %topic% : Configured Tasmota topic
+# %deviceid% : Remote ID
+# %type% : Remote type
+# %mac% : Full MAC address
+# %shortmac% : Last 6 characters of MAC
+
+# Example with custom template:
+EweTopicMode 3 %prefix%/custom/%deviceid%/%type%
 ```
+
+#### Usage Statistics
+```
+# Enable/disable statistics
+EweStats ON    # Enable statistics
+EweStats OFF   # Disable statistics
+EweStats       # Show current state
+
+# Display button statistics
+EweShowStats <deviceId>_<button>
+# Example: EweShowStats 5AD9E316_1
+
+# Response (JSON format):
+{
+    "total": 42,
+    "first_used": "2024-03-16 08:45:24",
+    "last_used": "2024-03-16 09:12:04",
+    "actions": {
+        "single": 30,
+        "double": 10,
+        "hold": 2
+    },
+    "hourly": [0,0,0,5,10,15,12,0,...],  # 24h distribution
+    "daily": [10,15,5,2,5,3,2]           # 7-day distribution
+}
+```
+**Note**: Statistics are disabled by default to save memory. Use `EweStats ON` to enable them.
 
 ### MQTT Messages
 
