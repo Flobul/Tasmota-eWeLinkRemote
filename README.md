@@ -28,24 +28,57 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 #### Automatic installation 
    - Paste this code in your ESP32 via Tasmota web interface (Console -> Berry Scripting Console)
    ```
-  import path
-  def start_eweremote_setup()
-    var cl = webclient()
-    var url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/remote.be'
-    cl.begin(url)
-    var r = cl.GET()
-    if r != 200
-      print('error getting remote.be')
-      return false
-    end
-    var s = cl.get_string()
-    cl.close()
-    var f = open('remote.be', 'w')
-    f.write(s)
-    f.close()
-    load('remote.be')
-  end
-  start_eweremote_setup()
+   import path
+   
+   def download_file(url, filename)
+     var cl = webclient()
+     cl.begin(url)
+     var r = cl.GET()
+     if r != 200
+       print('error getting ' + filename)
+       return false
+     end
+     var s = cl.get_string()
+     cl.close()
+     var f = open(filename, 'w')
+     f.write(s)
+     f.close()
+     return true
+   end
+   
+   def start_eweremote_setup()
+     var remote_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/remote.be'
+     var config_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/ewe_config.json'
+   
+     if !download_file(remote_url, 'remote.be')
+       return false
+     end
+   
+     if !download_file(config_url, 'ewe_config.json')
+       return false
+     end
+   
+     load('remote.be')
+   end
+   
+   start_eweremote_setup()
+   ```
+### Load on boot
+
+If you would like a fully berry solution to loading eWeLinkRemote, add the following line to autoexec.be
+
+   ```
+    tasmota.add_rule('System#Boot', / -> tasmota.set_timer(10000, / -> load('remote.be')))
+   ```
+
+Otherwise, you can simply make a rule:
+
+   ```
+    Rule1 ON System#Boot DO backlog delay 20; br load('blerry.be') ENDON
+   ```
+Enable the rule:
+   ```
+    Rule1 1
    ```
 
 ## Configuration
