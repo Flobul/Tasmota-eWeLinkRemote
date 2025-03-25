@@ -98,17 +98,6 @@ class ewe_helpers
         ewe_helpers.write_config(config)
     end
 
-    static def set_topic_mode(mode)
-        var config = ewe_helpers.read_config()
-        config['topic_mode'] = mode
-        ewe_helpers.write_config(config)
-    end
-
-    static def get_topic_mode()
-        var config = ewe_helpers.read_config()
-        return config['topic_mode']
-    end
-
     static def set_topic_config(mode, template)
         var config = ewe_helpers.read_config()
         if !config['mqtt'] config['mqtt'] = {} end
