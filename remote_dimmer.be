@@ -3,7 +3,7 @@
 # Modified by @Flobul on 2025-04-24
 #     Add support for dimmer lights
 # Modified by @Flobul on 2025-05-01
-# Version 0.3.0
+# Version 0.3.1
 
 import string
 import json
@@ -154,23 +154,22 @@ class ewe_helpers
             device['bindings'][button_key] = []
         end
         
-        if output_type == 'dimmer'
-            dimmer_params = ewe_helpers.validate_dimmer_params(dimmer_params)
-        end
-        
         var binding = {
             'relay': relay,
             'actions': actions,
-            'output_type': output_type,
-            'dimmer_params': dimmer_params,
-            'dimmer_direction': 'up',
-            'last_value': 0,
-            'last_action': ''
+            'output_type': output_type
         }
+        
+        if output_type == 'dimmer'
+            if dimmer_params == nil
+                dimmer_params = {'step': 20, 'min': 0, 'max': 100}
+            end
+            binding['dimmer_params'] = dimmer_params
+        end
         
         device['bindings'][button_key].push(binding)
         
-        print(format('DBG: Added binding with params: %s', json.dump(dimmer_params)))
+        print(format('DBG: Added binding with params: %s', json.dump(binding['dimmer_params'])))
         
         ewe_helpers.write_config(config)
         return true
@@ -275,9 +274,20 @@ class ewe_helpers
             params = {}
         end
         
-        params['max'] = 100
-        params['min'] = params.find('min', 0) < 0 ? 0 : params.find('min', 0)
-        params['step'] = params.find('step', 20) < 1 ? 20 : params.find('step', 20)
+        params['step'] = params.find('step', 20)
+        if params['step'] < 1 || params['step'] > 100
+            params['step'] = 20
+        end
+        
+        params['min'] = params.find('min', 0)
+        if params['min'] < 0
+            params['min'] = 0
+        end
+        
+        params['max'] = params.find('max', 100)
+        if params['max'] < 0 || params['max'] > 1000
+            params['max'] = 100
+        end
         
         return params
     end
@@ -896,8 +906,7 @@ end
 def cmd_add_binding(cmd, idx, payload, payload_json)
     var parts = string.split(payload, '_')
     if size(parts) < 4
-        tasmota.resp_cmnd_str('Invalid format. Use: deviceId_button_relay_actions_type[_step_min_max]')
-        return
+        return {'EweAddBinding': 'Invalid format. Use: deviceId_button_relay_actions_type[_step_min_max]'}
     end
     
     var deviceId = parts[0]
@@ -905,18 +914,32 @@ def cmd_add_binding(cmd, idx, payload, payload_json)
     var relay = int(parts[2])
     var actions = string.split(parts[3], ',')
     var output_type = 'relay'
-    var dimmer_params = {'step': 20, 'min': 0, 'max': 100}
+    var dimmer_params = nil
     
     if size(parts) >= 5
         output_type = parts[4]
-        if output_type == 'dimmer' && size(parts) >= 8
+        if output_type == 'dimmer'
             dimmer_params = {
-                'step': int(parts[5]),
-                'min': int(parts[6]),
-                'max': int(parts[7])
+                'step': 20,
+                'min': 0,
+                'max': 100
             }
+            if size(parts) >= 8
+                try
+                    dimmer_params = {
+                        'step': int(parts[5]),
+                        'min': int(parts[6]),
+                        'max': int(parts[7])
+                    }
+                    print('DBG: Parsed dimmer params:', str(parts[5]), str(parts[6]), str(parts[7]))
+                except .. 
+                    print('DBG: Error parsing dimmer params, using defaults')
+                end
+            end
         end
     end
+    
+    print('DBG: Adding binding with params:', str(dimmer_params))
     
     if ewe_helpers.add_binding(deviceId, button, relay, actions, output_type, dimmer_params)
         tasmota.resp_cmnd_str('Binding added')
