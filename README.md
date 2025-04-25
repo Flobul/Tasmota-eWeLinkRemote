@@ -18,11 +18,11 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 ### Module installation:
 
 #### Manual installation 
-   - Download the `remote.be` file
+   - Download the `remote.be` file or `remote_dimmer.be`
    - Copy it to your ESP32 via Tasmota web interface (Console -> Manage File System)
    - Enable it:
    ```
-   br load('remote.be')
+   br load('remote.be') # or remote_dimmer.be
    ```
 
 #### Automatic installation 
@@ -47,10 +47,10 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
    end
    
    def start_eweremote_setup()
-     var remote_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/remote.be'
+     var remote_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/remote.be' # or remote_dimmer.be
      var config_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/ewe_config.json'
    
-     if !download_file(remote_url, 'remote.be')
+     if !download_file(remote_url, 'remote.be') # or remote_dimmer.be
        return false
      end
    
@@ -58,7 +58,7 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
        return false
      end
    
-     load('remote.be')
+     load('remote.be') # or remote_dimmer.be
    end
    
    start_eweremote_setup()
@@ -68,13 +68,13 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 If you would like a fully berry solution to loading eWeLinkRemote, add the following line to autoexec.be
 
    ```
-    tasmota.add_rule('System#Boot', / -> tasmota.set_timer(10000, / -> load('remote.be')))
+    tasmota.add_rule('System#Boot', / -> tasmota.set_timer(10000, / -> load('remote.be'))) # or remote_dimmer.be
    ```
 
 Otherwise, you can simply make a rule:
 
    ```
-    Rule1 ON System#Boot DO backlog delay 20; br load('blerry.be') ENDON
+    Rule1 ON System#Boot DO backlog delay 20; br load('remote.be') ENDON # or remote_dimmer.be
    ```
 Enable the rule:
    ```
@@ -95,13 +95,37 @@ The module adds a new "eWeLink Remote" button to Tasmota's main menu.
 
 #### Button Configuration
 
+
 For each button, you can configure:
-- The relay to control (dropdown list)
-- Actions that will trigger the relay:
+- The type of control:
+  - Relay: control a specific relay output
+  - Dimmer: control brightness level
+- Actions that will trigger the control:
   - Single: single click
   - Double: double click
   - Hold: long press
 - Click "Add" to create the binding
+
+**Dimmer Configuration**
+
+When "Dimmer" is selected, you can configure:
+- Step: dimming step value (1-100, default: 20)
+- Min: minimum brightness level (10-1000, default: 10)
+- Max: maximum brightness level (0-1000, default: 100)
+
+If SetOption37 >= 128, additional channel options become available:
+- All channels (Dimmer0)
+- RGB channels (Dimmer1)
+- White channels (Dimmer2)
+- Linked lights (Dimmer4)
+
+**Dimmer Behavior**
+- Single press: toggles between min and max values
+- Double press: sets to max value
+- Hold: progressively changes brightness
+  - First hold increases brightness
+  - When max is reached, direction changes to decrease
+  - When min is reached, direction changes to increase
 
 **Note**: A single button can control multiple relays with different actions.
 
@@ -123,9 +147,13 @@ EweRemoveDevice <id>
 #### Binding Management
 
 ```
-# Add a binding
-EweAddBinding <deviceId>_<button>_<relay>_<actions>
-# Example: EweAddBinding 5AD9E316_1_1_single,double
+# Add a relay binding
+EweAddBinding <deviceId>_<button>_<relay>_<actions>_relay
+# Example: EweAddBinding 5AD9E316_1_1_single,double_relay
+
+# Add a dimmer binding
+EweAddBinding <deviceId>_<button>_<channel>_<actions>_dimmer_<step>_<min>_<max>
+# Example: EweAddBinding 5AD9E316_1_0_hold_dimmer_20_10_100
 
 # Remove a binding
 EweRemoveBinding <deviceId>_<button>_<relay>
