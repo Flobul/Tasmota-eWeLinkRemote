@@ -168,8 +168,12 @@ class ewe_helpers
         end
         
         device['bindings'][button_key].push(binding)
-        
-        print(format('DBG: Added binding with params: %s', json.dump(binding['dimmer_params'])))
+    
+        if output_type == 'dimmer'
+            print(format('DBG: Added binding with params: %s', json.dump(binding['dimmer_params'])))
+        else
+            print('DBG: Added relay binding')
+        end
         
         ewe_helpers.write_config(config)
         return true
