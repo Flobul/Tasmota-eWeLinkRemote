@@ -1,9 +1,7 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2025-04-24
-#     Add support for dimmer lights
-# Modified by @Flobul on 2025-05-01
-# Version 0.3.2
+# Modified by @Flobul on 2025-06-07
+# Version 0.4.0
 
 import string
 import json
@@ -866,6 +864,28 @@ class ewe_remote : Driver
     end
 end
 
+class Status_Line_right : Driver
+    def web_status_line_right()
+        import webserver
+        webserver.content_send(format(
+            '<span style="'
+            'margin:2px;'
+            'cursor:default;'
+            'padding:1px 2px;'
+            'border-color:#%06X;'
+            'border-radius:5px;'
+            'border-style:solid;'
+            'border-width:1px"'
+            '%s>'
+            '%s'
+            '</span>',
+            0xAAAAAA,
+            '',
+            'eWeLink-Remote'
+        ))
+    end
+end
+
 def cmd_add_device(cmd, idx, payload, payload_json)
     var deviceId = payload
     if string.find(payload, '_') > 0
@@ -971,15 +991,21 @@ def cmd_remove_binding(cmd, idx, payload, payload_json)
 end
 
 def cmd_set_topic_mode(cmd, idx, payload, payload_json)
+    if payload == ''
+        var config = ewe_helpers.get_topic_config()
+        tasmota.resp_cmnd(format("{\"Mode\":%d,\"Template\":\"%s\"}", 
+            config['mode'], 
+            config['template']
+        ))
+        return
+    end
+    
     var parts = string.split(payload, ' ')
-    var mode = 0
+    var mode = int(parts[0])
     var template = ''
     
-    if size(parts) > 0
-        mode = int(parts[0])
-        if size(parts) > 1
-            template = string.split(payload, ' ', 2)[1]
-        end
+    if size(parts) > 1
+        template = string.split(payload, ' ', 2)[1]
     end
     
     if mode < 0 || mode > 3
@@ -993,7 +1019,6 @@ def cmd_set_topic_mode(cmd, idx, payload, payload_json)
     end
     
     ewe_helpers.set_topic_config(mode, template)
-    
     tasmota.resp_cmnd(format("{\"Mode\":%d,\"Template\":\"%s\"}", mode, template))
 end
 
@@ -1055,3 +1080,6 @@ tasmota.add_cmd('EweShowStats', cmd_show_stats)
 tasmota.add_cmd('EweStats', cmd_set_stats)
 
 ewe.web_add_handler()
+
+eweRemoteStatus = Status_Line_right()
+tasmota.add_driver(eweRemoteStatus)

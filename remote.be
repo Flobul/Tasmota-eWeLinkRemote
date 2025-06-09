@@ -1,7 +1,7 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2025-03-25
-# Version 0.2.1
+# Modified by @Flobul on 2025-06-07
+# Version 0.3.0
 
 import string
 import json
@@ -28,10 +28,8 @@ class State
 end
 cbuf = bytes(-64)
 
-# Global state variable
 var g_state = State()
 
-# Color variables for Tasmota web interface
 var col_text = tasmota.webcolor(1)                  # Text color
 var col_background = tasmota.webcolor(2)            # Background color of cards
 var col_button_default = tasmota.webcolor(3)        # Default button color
@@ -69,16 +67,26 @@ class ewe_helpers
         
         try
             var f = open("ewe_config.json", "r")
-            var config = json.load(f.read())
+            var current_config = json.load(f.read())
             f.close()
-            return config
+            
+            if !current_config.contains('mqtt')
+                current_config['mqtt'] = default_config['mqtt']
+            else
+                if !current_config['mqtt'].contains('topic_mode')
+                    current_config['mqtt']['topic_mode'] = default_config['mqtt']['topic_mode']
+                end
+                if !current_config['mqtt'].contains('topic_template')
+                    current_config['mqtt']['topic_template'] = default_config['mqtt']['topic_template']
+                end
+            end
+            
+            return current_config
         except .. 
-            # The file does not exist, create it with the default config
             ewe_helpers.write_config(default_config)
             return default_config
         end
     end
-
     static def write_config(config)
         var f = open("ewe_config.json", "w")
         f.write(json.dump(config))
@@ -101,9 +109,12 @@ class ewe_helpers
     static def set_topic_config(mode, template)
         var config = ewe_helpers.read_config()
         if !config['mqtt'] config['mqtt'] = {} end
-        config['mqtt']['topic_mode'] = mode
-        config['mqtt']['topic_template'] = template ? template : ''
-        ewe_helpers.write_config(config)
+        
+        if config['mqtt']['topic_mode'] != mode || config['mqtt']['topic_template'] != template
+            config['mqtt']['topic_mode'] = mode
+            config['mqtt']['topic_template'] = template ? template : ''
+            ewe_helpers.write_config(config)
+        end
     end
     
     static def get_topic_config()
@@ -215,7 +226,6 @@ class ewe_helpers
         
         var button_key = 'button' + str(button)
         if !config['stats'][deviceId].contains(button_key)
-            # Initialisation des tableaux hourly et daily
             var hourly = []
             var daily = []
             for i:0..23 hourly.push(0) end
@@ -231,7 +241,6 @@ class ewe_helpers
             }
         end
         
-        # Mise à jour des statistiques
         var stats = config['stats'][deviceId][button_key]
         stats['total_clicks'] += 1
         stats['last_used'] = tasmota.rtc()['local']
@@ -239,7 +248,6 @@ class ewe_helpers
         if !stats['actions'].contains(action) stats['actions'][action] = 0 end
         stats['actions'][action] += 1
         
-        # Mise à jour des distributions
         var hour = int(tasmota.strftime('%H', tasmota.rtc()['local']))
         var day = int(tasmota.strftime('%w', tasmota.rtc()['local']))
         if hour >= 0 && hour < 24 stats['hourly'][hour] += 1 end
@@ -304,7 +312,6 @@ class ewe_remote : Driver
         var prefix = tasmota.cmd('Prefix', true)['Prefix3']
         
         if mode == 0
-            # Format Tasmota standard
             var macFormatted = getmac(6)
             var fullTopic = string.replace(string.replace(
                 tasmota.cmd('FullTopic', true)['FullTopic'],
@@ -312,13 +319,10 @@ class ewe_remote : Driver
                 '%prefix%', prefix)
             return string.replace(fullTopic, '%06X', macFormatted) + 'SWITCH'
         elif mode == 1
-            # Format simplifié
             return format("%s/tasmota_ble/%s", prefix, device_id)
         elif mode == 2
-            # Format avec type d'appareil
             return format("%s/ewelink_%s/%s", prefix, g_state.type.tolower(), device_id)
         elif mode == 3 && template != ''
-            # Format personnalisé
             var replacements = {
                 '%prefix%': prefix,
                 '%topic%': tasmota.cmd('Topic', true)['Topic'],
@@ -333,7 +337,6 @@ class ewe_remote : Driver
             end
             return result
         end
-        # Mode par défaut si invalide
         return format("%s/tasmota_ble/%s", prefix, device_id)
     end
 
@@ -373,7 +376,6 @@ class ewe_remote : Driver
 
         var timestamp = tasmota.rtc()['local']
         
-        # Mise à jour des variables globales pour web_sensor
         g_state.button = result['button']
         g_state.action = result['action']
         g_state.deviceId = result['device_id']
@@ -382,16 +384,12 @@ class ewe_remote : Driver
         g_state.seq = sequence
         g_state.time = timestamp
 
-        # Vérifier s'il y a un binding pour ce bouton et actionner le relais
         var bindings = ewe_helpers.get_button_bindings(result['device_id'], result['button'])
         if size(bindings) > 0
             var power = tasmota.get_power()
             if power != nil
-                # Pour chaque binding
                 for binding: bindings
-                    # Vérifie si l'action correspond
                     if binding['actions'].find(result['action']) != nil
-                        # Toggle le relais correspondant
                         if binding['relay'] <= size(power)
                             tasmota.cmd(format('Power%d toggle', binding['relay']))
                         end
@@ -400,14 +398,12 @@ class ewe_remote : Driver
             end
         end
 
-        # Création et envoi du message MQTT
         var msg = format(
             '{\"Button%d\":{\"Action\":\"%s\"},\"Signal\":%d,\"DeviceType\":\"%s\",\"Sequence\":%d,\"Timestamp\":%d}',
             result['button'], result['action'], RSSI, device_type, sequence, timestamp
         )
         mqtt.publish(self.get_mqtt_topic(result['device_id']), msg)
 
-        # Génération de l'événement Tasmota
         tasmota.cmd(format("Event Button%d_%s", result['button'], result['action']))
     end
 
@@ -418,17 +414,14 @@ class ewe_remote : Driver
         var isRegistered = ewe_helpers.is_device_registered(deviceId)
         var current_time = tasmota.rtc()['local']
 
-        # Organiser l'historique par device
         if !self.button_history
             self.button_history = {}
         end
 
-        # Créer une entrée pour ce device si elle n'existe pas
         if !self.button_history.contains(deviceId)
             self.button_history[deviceId] = {}
         end
 
-        # Stocker l'état actuel dans l'historique pour ce device
         var button_key = str(g_state.button)
         self.button_history[deviceId][button_key] = {
             'button': g_state.button,
@@ -438,7 +431,6 @@ class ewe_remote : Driver
             'type': g_state.type
         }
 
-        # Nettoyer l'historique des entrées plus vieilles que 3600 secondes
         var devices_to_remove = []
         for dev: self.button_history.keys()
             var buttons_to_remove = []
@@ -491,7 +483,7 @@ class ewe_remote : Driver
             if isDevRegistered
                 msg += format(
                     '{s}<button style="background-color: %s; color: white; border:0; border-radius:0.3rem; padding:5px 10px; cursor:pointer; transition-duration:0.4s" ' ..
-                    'onmouseover="this.style.backgroundColor=\'%s\'" ' ..  # Couleur hover pour Remove
+                    'onmouseover="this.style.backgroundColor=\'%s\'" ' .. 
                     'onmouseout="this.style.backgroundColor=\'%s\'" ' ..
                     'onclick="fetch(\'cm?cmnd=EweRemoveDevice %s\')">Remove Device</button>{e}',
                     col_button_delete, col_button_delete_hover, col_button_delete, dev
@@ -499,7 +491,7 @@ class ewe_remote : Driver
             else
                 msg += format(
                     '{s}<button style="background-color: %s; color: white; border:0; border-radius:0.3rem; padding:5px 10px; cursor:pointer; transition-duration:0.4s" ' ..
-                    'onmouseover="this.style.backgroundColor=\'%s\'" ' ..  # Couleur hover pour Save
+                    'onmouseover="this.style.backgroundColor=\'%s\'" ' .. 
                     'onmouseout="this.style.backgroundColor=\'%s\'" ' ..
                     'onclick="fetch(\'cm?cmnd=EweAddDevice %s\')">Save Device</button>{e}',
                     col_button_success, col_button_success_hover, col_button_success, dev
@@ -558,7 +550,6 @@ class ewe_remote : Driver
                 col_background, deviceId, device_type
             ))
 
-            # Configuration des boutons
             for btn: 1..num_buttons
                 webserver.content_send(format(
                     '<div style="background:rgba(0,0,0,0.05)">' ..
@@ -566,7 +557,6 @@ class ewe_remote : Driver
                     btn
                 ))
                 
-                # Bindings actuels
                 var current_bindings = device.find('bindings', {})
                 var button_key = 'button' + str(btn)
                 
@@ -592,7 +582,6 @@ class ewe_remote : Driver
                     end
                 end
                 
-                # Interface d'ajout
                 if power_count > 0
                     webserver.content_send(
                         '<div>' ..
@@ -609,7 +598,7 @@ class ewe_remote : Driver
                     webserver.content_send('</select>')
                     
                     webserver.content_send(
-                        '<label style="margin:0 5px"><input type="checkbox" id="single' + str(btn) + '_' + deviceId + '" checked> Single</label>' ..  # 'Single' coché par défaut
+                        '<label style="margin:0 5px"><input type="checkbox" id="single' + str(btn) + '_' + deviceId + '" checked> Single</label>' ..
                         '<label style="margin:0 5px"><input type="checkbox" id="double' + str(btn) + '_' + deviceId + '"> Double</label>' ..
                         '<label style="margin:0 5px"><input type="checkbox" id="hold' + str(btn) + '_' + deviceId + '"> Hold</label>' ..
                         format('<button onclick="addBinding(\'%s\',%d)" ' ..
@@ -625,7 +614,6 @@ class ewe_remote : Driver
                 webserver.content_send('</div>')
             end
             
-            # Bouton de suppression
             webserver.content_send(format(
                 '<div style="text-align:right; margin-top:10px">' ..
                 '<button onclick="if(confirm(\'Remove this remote?\')) fetch(\'cm?cmnd=EweRemoveDevice %s\').then(()=>window.location.reload())" ' ..
@@ -638,7 +626,6 @@ class ewe_remote : Driver
             ))
         end
         
-        # JavaScript inchangé
         webserver.content_send(
             '<script>' ..
             'function addBinding(deviceId, btn) {' ..
@@ -667,15 +654,34 @@ class ewe_remote : Driver
     end
 end
 
-# Commandes Tasmota
+class Status_Line_right : Driver
+    def web_status_line_right()
+        import webserver
+        webserver.content_send(format(
+            '<span style="'
+            'margin:2px;'
+            'cursor:default;'
+            'padding:1px 2px;'
+            'border-color:#%06X;'
+            'border-radius:5px;'
+            'border-style:solid;'
+            'border-width:1px"'
+            '%s>'
+            '%s'
+            '</span>',
+            0xAAAAAA,
+            '',
+            'eWeLink-Remote'
+        ))
+    end
+end
+
 def cmd_add_device(cmd, idx, payload, payload_json)
-    # Nettoie le payload des éventuels caractères supplémentaires
     var deviceId = payload
     if string.find(payload, '_') > 0
         deviceId = string.split(payload, '_')[1]  # Prend la partie après le _
     end
     
-    # Si deviceId est vide, affiche la liste des devices
     if deviceId == ''
         var config = ewe_helpers.read_config()
         if !config['devices'] || size(config['devices']) == 0
@@ -691,7 +697,6 @@ def cmd_add_device(cmd, idx, payload, payload_json)
         return
     end
     
-    # Enlève tout ce qui n'est pas hexadécimal
     deviceId = string.split(deviceId, '[^0-9A-Fa-f]')[0]
     
     ewe_helpers.add_device(deviceId)
@@ -750,15 +755,21 @@ def cmd_remove_binding(cmd, idx, payload, payload_json)
 end
 
 def cmd_set_topic_mode(cmd, idx, payload, payload_json)
+    if payload == ''
+        var config = ewe_helpers.get_topic_config()
+        tasmota.resp_cmnd(format("{\"Mode\":%d,\"Template\":\"%s\"}", 
+            config['mode'], 
+            config['template']
+        ))
+        return
+    end
+    
     var parts = string.split(payload, ' ')
-    var mode = 0
+    var mode = int(parts[0])
     var template = ''
     
-    if size(parts) > 0
-        mode = int(parts[0])
-        if size(parts) > 1
-            template = string.split(payload, ' ', 2)[1]
-        end
+    if size(parts) > 1
+        template = string.split(payload, ' ', 2)[1]
     end
     
     if mode < 0 || mode > 3
@@ -772,7 +783,6 @@ def cmd_set_topic_mode(cmd, idx, payload, payload_json)
     end
     
     ewe_helpers.set_topic_config(mode, template)
-    
     tasmota.resp_cmnd(format("{\"Mode\":%d,\"Template\":\"%s\"}", mode, template))
 end
 
@@ -812,7 +822,6 @@ end
 
 def cmd_set_stats(cmd, idx, payload, payload_json)
     if payload == ''
-        # If no argument, return the current state
         var enabled = ewe_helpers.is_stats_enabled()
         tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
         return
@@ -823,7 +832,6 @@ def cmd_set_stats(cmd, idx, payload, payload_json)
     tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
 end
 
-# Initialization
 ewe = ewe_remote()
 tasmota.add_driver(ewe)
 
@@ -835,5 +843,7 @@ tasmota.add_cmd('EweRemoveBinding', cmd_remove_binding)
 tasmota.add_cmd('EweShowStats', cmd_show_stats)
 tasmota.add_cmd('EweStats', cmd_set_stats)
 
-# Add the web page handler for configuration
 ewe.web_add_handler()
+
+eweRemoteStatus = Status_Line_right()
+tasmota.add_driver(eweRemoteStatus)
