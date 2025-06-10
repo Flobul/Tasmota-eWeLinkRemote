@@ -18,11 +18,11 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 ### Module installation:
 
 #### Manual installation 
-   - Download the `remote.be` file or `remote_dimmer.be`
+   - Download the `ewe_remote.be` file or `ewe_remote_dimmer.be`
    - Copy it to your ESP32 via Tasmota web interface (Console -> Manage File System)
    - Enable it:
    ```
-   br load('remote.be') # or remote_dimmer.be
+   br load('ewe_remote.be') # or ewe_remote_dimmer.be
    ```
 
 #### Automatic installation 
@@ -47,10 +47,10 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
    end
    
    def start_eweremote_setup()
-     var remote_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/remote.be' # or remote_dimmer.be
+     var remote_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/ewe_remote.be' # or ewe_remote_dimmer.be
      var config_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/ewe_config.json'
    
-     if !download_file(remote_url, 'remote.be') # or remote_dimmer.be
+     if !download_file(remote_url, 'ewe_remote.be') # or remote_dimmer.be
        return false
      end
    
@@ -58,7 +58,7 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
        return false
      end
    
-     load('remote.be') # or remote_dimmer.be
+     load('ewe_remote.be') # or remote_dimmer.be
    end
    
    start_eweremote_setup()
@@ -68,13 +68,13 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 If you would like a fully berry solution to loading eWeLinkRemote, add the following line to autoexec.be
 
    ```
-    tasmota.add_rule('System#Boot', / -> tasmota.set_timer(10000, / -> load('remote.be'))) # or remote_dimmer.be
+    tasmota.add_rule('System#Boot', / -> tasmota.set_timer(10000, / -> load('ewe_remote.be'))) # or ewe_remote_dimmer.be
    ```
 
 Otherwise, you can simply make a rule:
 
    ```
-    Rule1 ON System#Boot DO backlog delay 20; br load('remote.be') ENDON # or remote_dimmer.be
+    Rule1 ON System#Boot DO backlog delay 20; br load('ewe_remote.be') ENDON # or ewe_remote_dimmer.be
    ```
 Enable the rule:
    ```
@@ -93,8 +93,15 @@ The module adds a new "eWeLink Remote" button to Tasmota's main menu.
 2. The remote appears in the interface
 3. Click "Save Device" to register it
 
-#### Button Configuration
+#### Remote Aliases
 
+Each remote can be assigned a friendly name (alias):
+- Enter the desired name in the text field below the remote ID
+- Click "Update Alias" to save
+- The alias will be used in MQTT topics when configured (modes 1-3)
+- Aliases make it easier to identify remotes in your setup
+
+#### Button Configuration
 
 For each button, you can configure:
 - The type of control:
@@ -142,6 +149,13 @@ EweAddDevice <id>
 
 # Remove a remote
 EweRemoveDevice <id>
+
+# Set or modify remote alias
+EweAlias <deviceId> <alias>
+# Example: EweAlias 5AD9E316 LivingRoom
+
+# List all configured aliases
+EweAlias
 ```
 
 #### Binding Management
@@ -178,9 +192,13 @@ EweTopicMode <mode> [template]
 # %type% : Remote type
 # %mac% : Full MAC address
 # %shortmac% : Last 6 characters of MAC
+# %alias% : Remote alias (if set, otherwise deviceId)
 
 # Example with custom template:
 EweTopicMode 3 %prefix%/custom/%deviceid%/%type%
+
+# Example with custom template using alias:
+EweTopicMode 3 %prefix%/remote/%alias%/%type%
 ```
 
 #### Usage Statistics

@@ -1,7 +1,7 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2025-06-07
-# Version 0.4.0
+# Modified by @Flobul on 2025-06-10
+# Version 0.5.0
 
 import string
 import json
@@ -293,6 +293,22 @@ class ewe_helpers
         
         return params
     end
+
+    static def set_device_alias(deviceId, alias)
+        var config = ewe_helpers.read_config()
+        if !config['devices'] || !config['devices'].contains(deviceId) return false end
+
+        config['devices'][deviceId]['alias'] = alias
+        ewe_helpers.write_config(config)
+        return true
+    end
+
+    static def get_device_alias(deviceId)
+        var config = ewe_helpers.read_config()
+        if !config['devices'] || !config['devices'].contains(deviceId) return nil end
+
+        return config['devices'][deviceId].find('alias', nil)
+    end
 end
 
 class ewe_remote : Driver
@@ -347,7 +363,8 @@ class ewe_remote : Driver
         var mode = config['mode']
         var template = config['template']
         var prefix = tasmota.cmd('Prefix', true)['Prefix3']
-        
+        var alias = ewe_helpers.get_device_alias(device_id)
+
         if mode == 0
             var macFormatted = getmac(6)
             var fullTopic = string.replace(string.replace(
@@ -356,9 +373,9 @@ class ewe_remote : Driver
                 '%prefix%', prefix)
             return string.replace(fullTopic, '%06X', macFormatted) + 'SWITCH'
         elif mode == 1
-            return format("%s/tasmota_ble/%s", prefix, device_id)
+            return format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
         elif mode == 2
-            return format("%s/ewelink_%s/%s", prefix, g_state.type.tolower(), device_id)
+            return format("%s/ewelink_%s/%s", prefix, g_state.type.tolower(), alias ? alias : device_id)
         elif mode == 3 && template != ''
             var replacements = {
                 '%prefix%': prefix,
@@ -366,7 +383,8 @@ class ewe_remote : Driver
                 '%deviceid%': device_id,
                 '%type%': g_state.type,
                 '%mac%': getmac(0),
-                '%shortmac%': getmac(6)
+                '%shortmac%': getmac(6),
+                '%alias%': alias ? alias : device_id
             }
             var result = template
             for key: replacements.keys()
@@ -374,7 +392,7 @@ class ewe_remote : Driver
             end
             return result
         end
-        return format("%s/tasmota_ble/%s", prefix, device_id)
+        return format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
     end
 
     def test_button(d)
@@ -701,12 +719,21 @@ class ewe_remote : Driver
             if !device continue end
 
             var device_type = device.find('type', 'R5')
+            var device_alias = device.find('alias', '')
             var num_buttons = device_type == 'S-MATE2' ? 3 : 6
 
             webserver.content_send(format(
                 '<fieldset class="card" style="background-color: %s;">' ..
-                '<legend><b>Remote %s (%s)</b></legend>',
-                col_background, deviceId, device_type
+                '<legend><b>Remote %s (%s)</b></legend>' ..
+                '<div style="display:flex;">' ..
+                '<input type="text" id="alias_%s" value="%s" placeholder="Set alias..." style="flex:1; margin-right:5px">' ..
+                '<button onclick="updateAlias(\'%s\')" style="background:%s; color:white; border:none; padding:2px 8px; border-radius:3px; cursor:pointer; transition-duration:0.4s" ' ..
+                'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
+                'onmouseout="this.style.backgroundColor=\'%s\'">Update Alias</button>' ..
+                '</div>',
+                col_background, deviceId, device_type,
+                deviceId, device_alias,
+                deviceId, col_button, col_button_hover, col_button
             ))
 
             for btn: 1..num_buttons
@@ -822,6 +849,11 @@ class ewe_remote : Driver
         
         webserver.content_send(
             '<script>' ..
+            'function updateAlias(deviceId) {' ..
+            '  const alias = document.getElementById("alias_"+deviceId).value;' ..
+            '  fetch("cm?cmnd=EweAlias "+deviceId+" "+alias)' ..
+            '    .then(() => window.location.reload());' ..
+            '}' ..
             'function addBinding(deviceId, btn) {' ..
             '  const output_type = document.getElementById("output_type"+btn+"_"+deviceId).value;' ..
             '  var relay = "0";' ..
@@ -1068,6 +1100,42 @@ def cmd_set_stats(cmd, idx, payload, payload_json)
     tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
 end
 
+def cmd_set_alias(cmd, idx, payload, payload_json)
+    if payload == ''
+        var config = ewe_helpers.read_config()
+        if !config['devices'] || size(config['devices']) == 0
+            tasmota.resp_cmnd_str('No devices registered')
+            return
+        end
+        
+        var response = {}
+        for id: config['devices'].keys()
+            response[id] = config['devices'][id].find('alias', '')
+        end
+        tasmota.resp_cmnd(response)
+        return
+    end
+    
+    var parts = string.split(payload, ' ', 2)
+    if size(parts) != 2
+        tasmota.resp_cmnd_str('Invalid format. Use: EweAlias <deviceId> <alias>')
+        return
+    end
+    
+    var deviceId = parts[0]
+    var alias = parts[1]
+    
+    if ewe_helpers.set_device_alias(deviceId, alias)
+        var response = {
+            "DeviceId": deviceId,
+            "Alias": alias
+        }
+        tasmota.resp_cmnd(response)
+    else
+        tasmota.resp_cmnd_failed()
+    end
+end
+
 ewe = ewe_remote()
 tasmota.add_driver(ewe)
 
@@ -1078,6 +1146,7 @@ tasmota.add_cmd('EweAddBinding', cmd_add_binding)
 tasmota.add_cmd('EweRemoveBinding', cmd_remove_binding)
 tasmota.add_cmd('EweShowStats', cmd_show_stats)
 tasmota.add_cmd('EweStats', cmd_set_stats)
+tasmota.add_cmd('EweAlias', cmd_set_alias)
 
 ewe.web_add_handler()
 
