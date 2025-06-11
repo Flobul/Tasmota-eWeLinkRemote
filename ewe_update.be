@@ -1,13 +1,14 @@
 import string
 import path
+import json
 
 var base_url = "https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/"
 var ewe_temp = "ewe_temp.be"
-
 var files = {
     'remote': "ewe_remote.be",
     'dimmer': "ewe_remote_dimmer.be"
 }
+var cron_rule = nil
 
 def get_version_from_file(filename)
     try
@@ -29,8 +30,6 @@ def get_version_from_file(filename)
 end
 
 def cmd_check_update(cmd, idx, payload, payload_json)
-    import json
-
     var result = {}
     var found = false
 
@@ -50,7 +49,7 @@ def cmd_check_update(cmd, idx, payload, payload_json)
 
             if !remote continue end
 
-            result[name] = {
+            result[files[name]] = {
                 'current': current,
                 'new': remote,
                 'update': remote != current
@@ -94,5 +93,74 @@ def cmd_do_update(cmd, idx, payload, payload_json)
     end
 end
 
+def save_config(key, value)
+    try
+        var config = {}
+        try
+            var f = open('ewe_config.json', 'r')
+            config = json.load(f.read())
+            f.close()
+        except .. 
+            print('DBG: Creating new config file')
+        end
+
+        config[key] = value
+
+        var f = open('ewe_config.json', 'w')
+        f.write(json.dump(config))
+        f.close()
+        return true
+    except .. as e
+        print(format('ERR: Cannot save config: %s', e))
+        return false
+    end
+end
+
+def load_config(key)
+    try
+        var f = open('ewe_config.json', 'r')
+        var config = json.load(f.read())
+        f.close()
+        return config.find(key, false)
+    except ..
+        return false
+    end
+end
+
+def cmd_auto_update(cmd, idx, payload, payload_json)
+    
+    if !payload
+        var auto = load_config('auto_update')
+        tasmota.resp_cmnd(format('{"AutoUpdate":"%s"}', auto ? "1" : "0"))
+        return
+    end
+
+    var enabled = payload == "1" || payload == "true" || payload == "on"
+    
+    if cron_rule != nil
+        tasmota.remove_rule(cron_rule)
+        cron_rule = nil
+    end
+
+    save_config('auto_update', enabled)
+
+    if enabled
+        cron_rule = tasmota.add_rule("Time#Minute=0", def ()
+            if tasmota.time_str(tasmota.rtc()['local'])['hour'] == "00"
+                cmd_check_update(nil, nil, nil, nil)
+            end
+        end)
+        tasmota.resp_cmnd('{"AutoUpdate":"1","Message":"Auto update enabled, will check at midnight"}')
+    else
+        tasmota.resp_cmnd('{"AutoUpdate":"0","Message":"Auto update disabled"}')
+    end
+end
+
+var auto = load_config('auto_update')
+if auto
+    cmd_auto_update(nil, nil, "1", nil)
+end
+
 tasmota.add_cmd('EweCheckUpdate', cmd_check_update)
 tasmota.add_cmd('EweUpdate', cmd_do_update)
+tasmota.add_cmd('EweAutoUpdate', cmd_auto_update)

@@ -1,11 +1,12 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2025-06-10
-# Version 0.5.0
+# Modified by @Flobul on 2025-06-11
+# Version 0.6.0
 
 import string
 import json
 import mqtt
+import path
 
 class State
     var button
@@ -1134,6 +1135,10 @@ def cmd_set_alias(cmd, idx, payload, payload_json)
     else
         tasmota.resp_cmnd_failed()
     end
+end
+
+if path.exists("ewe_update.be")
+    load("ewe_update.be")
 end
 
 ewe = ewe_remote()

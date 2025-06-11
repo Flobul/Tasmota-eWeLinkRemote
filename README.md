@@ -29,36 +29,42 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
    - Paste this code in your ESP32 via Tasmota web interface (Console -> Berry Scripting Console)
    ```
    import path
-   
-   def download_file(url, filename)
+
+   var base_url = "https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/"
+   var files = {
+     'remote': "ewe_remote.be",
+     'dimmer': "ewe_remote_dimmer.be",
+     'update': "ewe_update.be",
+     'config': "ewe_config.json"
+   }
+
+   def download_file(filename)
      var cl = webclient()
-     cl.begin(url)
-     var r = cl.GET()
-     if r != 200
-       print('error getting ' + filename)
-       return false
-     end
-     var s = cl.get_string()
+     cl.begin(base_url + filename)
+     if cl.GET() != 200 return false end
+     cl.write_file(filename)
      cl.close()
-     var f = open(filename, 'w')
-     f.write(s)
-     f.close()
      return true
    end
    
    def start_eweremote_setup()
-     var remote_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/ewe_remote.be' # or ewe_remote_dimmer.be
-     var config_url = 'https://raw.githubusercontent.com/Flobul/Tasmota-eWeLinkRemote/main/ewe_config.json'
-   
-     if !download_file(remote_url, 'ewe_remote.be') # or remote_dimmer.be
-       return false
+     var success = true
+     
+     for name: files.keys()
+       print(format("Downloading %s...", files[name]))
+       if !download_file(files[name])
+         print(format("Error downloading %s", files[name]))
+         success = false
+         break
+       end
      end
-   
-     if !download_file(config_url, 'ewe_config.json')
-       return false
+
+     if success
+       print("All files downloaded successfully")
+       load('ewe_remote.be')  # or ewe_remote_dimmer.be
+       return true
      end
-   
-     load('ewe_remote.be') # or remote_dimmer.be
+     return false
    end
    
    start_eweremote_setup()
@@ -243,6 +249,52 @@ Each button press sends an MQTT message:
   "Timestamp": 1741982724
 }
 ```
+
+### Auto-Update System
+
+The module includes an automatic update system that can check and install new versions.
+
+#### Update Commands
+
+```
+# Check for available updates
+EweCheckUpdate
+
+# Response (JSON format):
+{
+    "ewe_remote.be": {
+        "current": "0.3.0",
+        "new": "0.3.1",
+        "update": true
+    },
+    "ewe_remote_dimmer.be": {
+        "current": "0.2.0",
+        "new": "0.2.0",
+        "update": false
+    }
+}
+
+# Install available updates
+EweUpdate
+
+# Manage automatic updates
+EweAutoUpdate ON/1    # Enable daily check
+EweAutoUpdate OFF/0   # Disable automatic check
+EweAutoUpdate         # Show current status
+```
+
+#### Features
+
+- Updates are checked daily at midnight when enabled
+- Automatic update status is saved in `ewe_config.json`
+- The ESP32 automatically restarts after a successful update
+- The configuration is preserved during updates
+
+#### Requirements
+
+- Active internet connection
+- Files are downloaded from the main GitHub repository
+- The update system manages both `ewe_remote.be` and `ewe_remote_dimmer.be`
 
 ## Technical Information
 

@@ -1,1 +1,1 @@
-{"devices":{},"mqtt":{"topic_mode":0,"topic_template":""},"settings":{"stats_enabled":false}}
+{"devices":{},"auto_update":true,"mqtt":{"topic_mode":0,"topic_template":""},"settings":{"stats_enabled":false}}
