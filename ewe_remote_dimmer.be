@@ -1,7 +1,7 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
 # Modified by @Flobul on 2025-06-11
-# Version 0.6.0
+# Version 0.6.1
 
 import string
 import json
