@@ -568,7 +568,7 @@ class ewe_remote : Driver
                 '<fieldset class="card" style="background-color: %s;">' ..
                 '<legend><b>Remote %s (%s)</b></legend>' ..
                 '<div style="display:flex;">' ..
-                '<input type="text" id="alias_%s" value="%s" placeholder="Set alias..." style="margin-right:5px">' ..
+                '<input type="text" id="alias_%s" value="%s" placeholder="Set alias..." style="margin-right:5px;min-width:100px">' ..
                 '<button onclick="updateAlias(\'%s\')" style="background:%s; color:white; border:none; padding:2px 8px; border-radius:3px; cursor:pointer; transition-duration:0.4s" ' ..
                 'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
                 'onmouseout="this.style.backgroundColor=\'%s\'">Update Alias</button>' ..
