@@ -739,7 +739,7 @@ class ewe_remote : Driver
 
             for btn: 1..num_buttons
                 webserver.content_send(format(
-                    '<div style="background:rgba(0,0,0,0.05)">' ..
+                    '<div style="background:rgba(0,0,0,0.05); border: 1px white solid; border-radius: 15px;">' ..
                     '<div>Button %d</div>',
                     btn
                 ))
@@ -832,7 +832,7 @@ class ewe_remote : Driver
                         '<button onclick="addBinding(\'' + deviceId + '\',' + str(btn) + ')">Add</button>'
                     )
             
-                    webserver.content_send('</div>')
+                    webserver.content_send('</div></div>')
                 end
             end
             
