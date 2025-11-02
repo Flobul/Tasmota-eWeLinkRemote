@@ -155,7 +155,7 @@ class ewe_helpers
         return device['bindings'][button_key]
     end
 
-    static def add_binding(deviceId, button, relay, actions)
+    static def add_binding(deviceId, button, relay, actions, relayAction)
         var config = ewe_helpers.read_config()
         if !config['devices'] || !config['devices'].contains(deviceId) return false end
         
@@ -171,7 +171,8 @@ class ewe_helpers
         
         device['bindings'][button_key].push({
             'relay': relay,
-            'actions': actions
+            'actions': actions,
+            'relayAction' : relayAction ? relayAction : 'toggle'
         })
         
         ewe_helpers.write_config(config)
@@ -410,7 +411,8 @@ class ewe_remote : Driver
                 for binding: bindings
                     if binding['actions'].find(result['action']) != nil
                         if binding['relay'] <= size(power)
-                            tasmota.cmd(format('Power%d toggle', binding['relay']))
+                            var relayAction = binding['relayAction'] != nil ? binding['relayAction'] : 'toggle' 
+                            tasmota.cmd(format('Power%d %s', binding['relay'], relayAction))
                         end
                     end
                 end
@@ -418,8 +420,8 @@ class ewe_remote : Driver
         end
 
         var msg = format(
-            '{\"Button%d\":{\"Action\":\"%s\"},\"Signal\":%d,\"DeviceType\":\"%s\",\"Sequence\":%d,\"Timestamp\":%d}',
-            result['button'], result['action'], RSSI, device_type, sequence, timestamp
+            '{\"Button%d\":{\"Action\":\"%s\"},\"Signal\":%d,\"DeviceId\":\"%s\",\"DeviceType\":\"%s\",\"Sequence\":%d,\"Timestamp\":%d}',
+            result['button'], result['action'], RSSI, g_state.deviceId, device_type, sequence, timestamp
         )
         mqtt.publish(self.get_mqtt_topic(result['device_id']), msg)
 
@@ -595,7 +597,7 @@ class ewe_remote : Driver
                             '<div style="background:%s; color:white; border-radius:3px; display:inline-flex; justify-content:space-between; align-items:center; transition-duration:0.4s" ' ..
                             'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
                             'onmouseout="this.style.backgroundColor=\'%s\'">' ..
-                            '<span>Relay %d [%s]</span>' ..
+                            '<span>[%s] Relay %d [%s]</span>' ..
                             '<button onclick="fetch(\'cm?cmnd=EweRemoveBinding %s_%d_%d\').then(()=>window.location.reload())" ' ..
                             'style="background:none; border:none; color:white; cursor:pointer;width: 20px">' ..
                             '×</button>' ..
@@ -603,8 +605,9 @@ class ewe_remote : Driver
                             col_button_success,
                             col_button_delete,
                             col_button_success,
-                            binding['relay'],
                             binding['actions'].concat(','),
+                            binding['relay'],
+                            binding['relayAction'] == '1' ? 'on' : binding['relayAction'] == '0' ? 'off' : 'toggle',
                             deviceId, btn, binding['relay']
                         ))
                     end
@@ -639,7 +642,7 @@ class ewe_remote : Driver
                     )
                 end
                 
-                webserver.content_send('</div></div>')
+                webserver.content_send('</div>')
             end
             
             webserver.content_send(format(
@@ -752,7 +755,7 @@ end
 
 def cmd_add_binding(cmd, idx, payload, payload_json)
     var parts = string.split(payload, '_')
-    if size(parts) != 4
+    if size(parts) != 4 && size(parts) != 5 
         tasmota.resp_cmnd_str('Invalid format. Use: deviceId_button_relay_actions')
         return
     end
@@ -761,8 +764,9 @@ def cmd_add_binding(cmd, idx, payload, payload_json)
     var button = int(parts[1])
     var relay = int(parts[2])
     var actions = string.split(parts[3], ',')
+    var relayAction = size(parts) != 5 ? 'toggle' : parts[4]
     
-    if ewe_helpers.add_binding(deviceId, button, relay, actions)
+    if ewe_helpers.add_binding(deviceId, button, relay, actions, relayAction)
         tasmota.resp_cmnd_str('Binding added')
     else
         tasmota.resp_cmnd_failed()

@@ -168,8 +168,9 @@ EweAlias
 
 ```
 # Add a relay binding
-EweAddBinding <deviceId>_<button>_<relay>_<actions>_relay
-# Example: EweAddBinding 5AD9E316_1_1_single,double_relay
+EweAddBinding <deviceId>_<button>_<relay>_<actions>_<relayAction>
+# Example: EweAddBinding 5AD9E316_1_1_single,double_toggle
+# Example: EweAddBinding 5AD9E316_1_2_single_0
 
 # Add a dimmer binding
 EweAddBinding <deviceId>_<button>_<channel>_<actions>_dimmer_<step>_<min>_<max>
