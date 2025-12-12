@@ -1,7 +1,7 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2025-09-28
-# Version 0.5.1
+# Modified by @Flobul on 2025-12-12
+# Version 0.6.0
 
 import string
 import json
@@ -155,7 +155,7 @@ class ewe_helpers
         return device['bindings'][button_key]
     end
 
-    static def add_binding(deviceId, button, relay, actions)
+    static def add_binding(deviceId, button, relay, actions, relayAction)
         var config = ewe_helpers.read_config()
         if !config['devices'] || !config['devices'].contains(deviceId) return false end
         
@@ -171,7 +171,8 @@ class ewe_helpers
         
         device['bindings'][button_key].push({
             'relay': relay,
-            'actions': actions
+            'actions': actions,
+            'relayAction': relayAction ? relayAction : 'toggle'
         })
         
         ewe_helpers.write_config(config)
@@ -287,6 +288,112 @@ class ewe_helpers
     
         return config['devices'][deviceId].find('alias', nil)
     end
+
+    static def set_ha_discovery_enabled(enabled)
+        var config = ewe_helpers.read_config()
+        if !config['settings'] config['settings'] = {} end
+        config['settings']['ha_discovery'] = enabled
+        ewe_helpers.write_config(config)
+    end
+    
+    static def is_ha_discovery_enabled()
+        var config = ewe_helpers.read_config()
+        if !config['settings'] return false end
+        return config['settings'].find('ha_discovery', false)
+    end
+
+    static def get_ha_discovery_prefix()
+        var config = ewe_helpers.read_config()
+        if !config['settings'] return 'homeassistant' end
+        return config['settings'].find('ha_discovery_prefix', 'homeassistant')
+    end
+
+    static def set_ha_discovery_prefix(prefix)
+        var config = ewe_helpers.read_config()
+        if !config['settings'] config['settings'] = {} end
+        config['settings']['ha_discovery_prefix'] = prefix
+        ewe_helpers.write_config(config)
+    end
+
+    static def publish_ha_discovery_for_device(device_id, device_type)
+        if !ewe_helpers.is_ha_discovery_enabled() return end
+        
+        var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
+        var alias = ewe_helpers.get_device_alias(device_id)
+        var device_name = alias ? alias : device_id
+        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
+        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
+        var macFormatted = getmac(6)
+        tasmota_topic = string.replace(tasmota_topic, '%06X', macFormatted)
+        var button_actions = ['single', 'double', 'hold']
+        
+        var device_info = {
+            'identifiers': [device_id],
+            'name': format('eWeLink %s %s', device_type, device_name),
+            'model': device_type,
+            'manufacturer': 'eWeLink',
+            'via_device': tasmota_topic
+        }
+        
+        var prefix = tasmota.cmd('Prefix', true)['Prefix3']
+        var state_topic = format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
+        
+        for btn: 1..num_buttons
+            for action_idx: 0..2
+                var action = button_actions[action_idx]
+                var unique_id = format('ewelink_%s_btn%d_%s', device_id, btn, action)
+                var object_id = format('%s_button_%d_%s', device_id, btn, action)
+                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
+                
+                var config = {
+                    'name': format('Button %d %s', btn, action),
+                    'unique_id': unique_id,
+                    'state_topic': state_topic,
+                    'value_template': format('{{value_json.Button%d.Action if value_json.Button%d.Action == "%s" else ""}}', btn, btn, action),
+                    'event_types': [action],
+                    'device': device_info
+                }
+                
+                mqtt.publish(config_topic, json.dump(config), true)
+            end
+        end
+        
+        var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
+        var signal_config = {
+            'name': 'Signal',
+            'unique_id': format('ewelink_%s_signal', device_id),
+            'state_topic': state_topic,
+            'value_template': '{{value_json.Signal}}',
+            'unit_of_measurement': 'dBm',
+            'device_class': 'signal_strength',
+            'state_class': 'measurement',
+            'device': device_info
+        }
+        mqtt.publish(sensor_config_topic, json.dump(signal_config), true)
+    end
+
+    static def remove_ha_discovery_for_device(device_id, device_type)
+        if !ewe_helpers.is_ha_discovery_enabled() return end
+        
+        var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
+        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
+        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
+        var macFormatted = getmac(6)
+        tasmota_topic = string.replace(tasmota_topic, '%06X', macFormatted)
+        var button_actions = ['single', 'double', 'hold']
+        
+        for btn: 1..num_buttons
+            for action_idx: 0..2
+                var action = button_actions[action_idx]
+                var object_id = format('%s_button_%d_%s', device_id, btn, action)
+                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
+                mqtt.publish(config_topic, '', true)
+            end
+        end
+        
+        var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
+        mqtt.publish(sensor_config_topic, '', true)
+    end
 end
 
 class ewe_remote : Driver
@@ -359,6 +466,79 @@ class ewe_remote : Driver
         return format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
     end
 
+    def publish_ha_discovery(device_id, device_type)
+        if !ewe_helpers.is_ha_discovery_enabled() return end
+        
+        var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
+        var alias = ewe_helpers.get_device_alias(device_id)
+        var device_name = alias ? alias : device_id
+        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
+        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
+        
+        var device_info = {
+            'identifiers': [device_id],
+            'name': format('eWeLink %s %s', device_type, device_name),
+            'model': device_type,
+            'manufacturer': 'eWeLink',
+            'via_device': tasmota_topic
+        }
+        
+        for btn: 1..num_buttons
+            for action_idx: 0..2
+                var action = self.button_actions[action_idx]
+                var unique_id = format('ewelink_%s_btn%d_%s', device_id, btn, action)
+                var object_id = format('%s_button_%d_%s', device_id, btn, action)
+                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
+                
+                var state_topic = self.get_mqtt_topic(device_id)
+                
+                var config = {
+                    'name': format('Button %d %s', btn, action),
+                    'unique_id': unique_id,
+                    'state_topic': state_topic,
+                    'value_template': format('{{value_json.Button%d.Action if value_json.Button%d.Action == "%s" else ""}}', btn, btn, action),
+                    'event_types': [action],
+                    'device': device_info
+                }
+                
+                mqtt.publish(config_topic, json.dump(config), true)
+            end
+        end
+        
+        var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
+        var signal_config = {
+            'name': 'Signal',
+            'unique_id': format('ewelink_%s_signal', device_id),
+            'state_topic': self.get_mqtt_topic(device_id),
+            'value_template': '{{value_json.Signal}}',
+            'unit_of_measurement': 'dBm',
+            'device_class': 'signal_strength',
+            'state_class': 'measurement',
+            'device': device_info
+        }
+        mqtt.publish(sensor_config_topic, json.dump(signal_config), true)
+    end
+
+    def remove_ha_discovery(device_id, device_type)
+        if !ewe_helpers.is_ha_discovery_enabled() return end
+        
+        var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
+        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
+        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
+        
+        for btn: 1..num_buttons
+            for action_idx: 0..2
+                var action = self.button_actions[action_idx]
+                var object_id = format('%s_button_%d_%s', device_id, btn, action)
+                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
+                mqtt.publish(config_topic, '', true)
+            end
+        end
+        
+        var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
+        mqtt.publish(sensor_config_topic, '', true)
+    end
+
     def test_button(d)
         if size(d) < 31 return nil end
         
@@ -410,7 +590,8 @@ class ewe_remote : Driver
                 for binding: bindings
                     if binding['actions'].find(result['action']) != nil
                         if binding['relay'] <= size(power)
-                            tasmota.cmd(format('Power%d toggle', binding['relay']))
+                            var relayAction = binding['relayAction'] != nil ? binding['relayAction'] : 'toggle'
+                            tasmota.cmd(format('Power%d %s', binding['relay'], relayAction))
                         end
                     end
                 end
@@ -418,8 +599,8 @@ class ewe_remote : Driver
         end
 
         var msg = format(
-            '{\"Button%d\":{\"Action\":\"%s\"},\"Signal\":%d,\"DeviceType\":\"%s\",\"Sequence\":%d,\"Timestamp\":%d}',
-            result['button'], result['action'], RSSI, device_type, sequence, timestamp
+            '{"Button%d":{"Action":"%s"},"Signal":%d,"DeviceId":"%s","DeviceType":"%s","Sequence":%d,"Timestamp":%d}',
+            result['button'], result['action'], RSSI, g_state.deviceId, device_type, sequence, timestamp
         )
         mqtt.publish(self.get_mqtt_topic(result['device_id']), msg)
 
@@ -545,6 +726,57 @@ class ewe_remote : Driver
         var config = ewe_helpers.read_config()
         if !config return nil end
 
+        # Configuration buttons at top
+        webserver.content_send(format(
+            '<fieldset class="card" style="background-color: %s; margin-bottom: 10px;">' ..
+            '<legend><b>Configuration</b></legend>' ..
+            '<div style="display:block; align-items:center">' ..
+            
+            # Topic Mode
+            '<div style="min-width:200px">' ..
+            '<label>MQTT Topic Mode:</label>' ..
+            '<select id="topicMode" style="width:100%%; margin-top:3px">' ..
+            '<option value="0"%s>Tasmota Switch (default)</option>' ..
+            '<option value="1"%s>Tasmota BLE (%%prefix%%/tasmota_ble/%%deviceId%%)</option>' ..
+            '<option value="2"%s>eWeLink Type (%%prefix%%/ewelink_%%type%%/%%deviceId%%)</option>' ..
+            '<option value="3"%s>Custom Template</option>' ..
+            '</select>' ..
+            '<input type="text" id="topicTemplate" placeholder="Template (mode 3)" style="width:100%%; margin-top:3px; display:%s">' ..
+            '<button onclick="updateTopicMode()" style="width:100%%; margin-top:5px; background:%s; color:white; border:none; border-radius:3px; cursor:pointer">Update Topic</button>' ..
+            '</div>' ..
+            
+            # Stats
+            '<div style="min-width:150px">' ..
+            '<label>Statistics:</label><br>' ..
+            '<button onclick="toggleStats()" id="statsBtn" style="width:100%%; margin-top:5px; background:%s; color:white; border:none; border-radius:3px; cursor:pointer">%s</button>' ..
+            '</div>' ..
+            
+            # HA Discovery
+            '<div style="min-width:200px">' ..
+            '<label>Home Assistant Discovery:</label><br>' ..
+            '<input type="text" id="haPrefix" value="%s" placeholder="HA Prefix" style="width:100%%; margin-top:3px">' ..
+            '<button onclick="toggleHA()" id="haBtn" style="width:100%%; margin-top:5px; background:%s; color:white; border:none; border-radius:3px; cursor:pointer">%s</button>' ..
+            '</div>' ..
+            
+            '</div>' ..
+            '</fieldset>',
+            col_background,
+            # Topic mode options
+            config['mqtt'].find('topic_mode', 0) == 0 ? ' selected' : '',
+            config['mqtt'].find('topic_mode', 0) == 1 ? ' selected' : '',
+            config['mqtt'].find('topic_mode', 0) == 2 ? ' selected' : '',
+            config['mqtt'].find('topic_mode', 0) == 3 ? ' selected' : '',
+            config['mqtt'].find('topic_mode', 0) == 3 ? 'block' : 'none',
+            col_button,
+            # Stats button
+            config['settings'].find('stats_enabled', false) ? col_button_success : col_button,
+            config['settings'].find('stats_enabled', false) ? 'Stats: ON' : 'Stats: OFF',
+            # HA Discovery
+            config['settings'].find('ha_discovery_prefix', 'homeassistant'),
+            config['settings'].find('ha_discovery', false) ? col_button_success : col_button,
+            config['settings'].find('ha_discovery', false) ? 'HA Discovery: ON' : 'HA Discovery: OFF'
+        ))
+
         var devices = config.find('devices', {})
         if size(devices) == 0
             webserver.content_send('<p style="text-align:center">No devices registered</p>')
@@ -568,7 +800,7 @@ class ewe_remote : Driver
                 '<fieldset class="card" style="background-color: %s;">' ..
                 '<legend><b>Remote %s (%s)</b></legend>' ..
                 '<div style="display:flex;">' ..
-                '<input type="text" id="alias_%s" value="%s" placeholder="Set alias..." style="margin-right:5px;min-width:100px">' ..
+                '<input type="text" id="alias_%s" value="%s" placeholder="Set alias..." style="margin-right:5px">' ..
                 '<button onclick="updateAlias(\'%s\')" style="background:%s; color:white; border:none; padding:2px 8px; border-radius:3px; cursor:pointer; transition-duration:0.4s" ' ..
                 'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
                 'onmouseout="this.style.backgroundColor=\'%s\'">Update Alias</button>' ..
@@ -595,7 +827,7 @@ class ewe_remote : Driver
                             '<div style="background:%s; color:white; border-radius:3px; display:inline-flex; justify-content:space-between; align-items:center; transition-duration:0.4s" ' ..
                             'onmouseover="this.style.backgroundColor=\'%s\'" ' ..
                             'onmouseout="this.style.backgroundColor=\'%s\'">' ..
-                            '<span>Relay %d [%s]</span>' ..
+                            '<span>[%s] Relay %d [%s]</span>' ..
                             '<button onclick="fetch(\'cm?cmnd=EweRemoveBinding %s_%d_%d\').then(()=>window.location.reload())" ' ..
                             'style="background:none; border:none; color:white; cursor:pointer;width: 20px">' ..
                             '×</button>' ..
@@ -603,6 +835,7 @@ class ewe_remote : Driver
                             col_button_success,
                             col_button_delete,
                             col_button_success,
+                            binding['relayAction'] == '1' ? 'ON' : binding['relayAction'] == '0' ? 'OFF' : 'Toggle',
                             binding['relay'],
                             binding['actions'].concat(','),
                             deviceId, btn, binding['relay']
@@ -624,6 +857,14 @@ class ewe_remote : Driver
                     end
                     
                     webserver.content_send('</select>')
+                    
+                    webserver.content_send(
+                        '<select id="action' + str(btn) + '_' + deviceId + '" style="width:auto; margin:0 5px">' ..
+                        '<option value="toggle">Toggle</option>' ..
+                        '<option value="1">ON</option>' ..
+                        '<option value="0">OFF</option>' ..
+                        '</select>'
+                    )
                     
                     webserver.content_send(
                         '<label style="margin:0 5px"><input type="checkbox" id="single' + str(btn) + '_' + deviceId + '" checked> Single</label>' ..
@@ -656,6 +897,38 @@ class ewe_remote : Driver
         
         webserver.content_send(
             '<script>' ..
+            'const topicModeSelect = document.getElementById("topicMode");' ..
+            'const topicTemplateInput = document.getElementById("topicTemplate");' ..
+            'topicModeSelect.addEventListener("change", function() {' ..
+            '  topicTemplateInput.style.display = this.value === "3" ? "block" : "none";' ..
+            '});' ..
+            'function updateTopicMode() {' ..
+            '  const mode = document.getElementById("topicMode").value;' ..
+            '  const template = document.getElementById("topicTemplate").value;' ..
+            '  const cmd = template && mode === "3" ? "EweTopicMode "+mode+" "+template : "EweTopicMode "+mode;' ..
+            '  fetch("cm?cmnd="+encodeURIComponent(cmd))' ..
+            '    .then(() => window.location.reload());' ..
+            '}' ..
+            'function toggleStats() {' ..
+            '  const btn = document.getElementById("statsBtn");' ..
+            '  const isOn = btn.textContent.includes("ON");' ..
+            '  fetch("cm?cmnd=EweStats "+(isOn ? "OFF" : "ON"))' ..
+            '    .then(() => window.location.reload());' ..
+            '}' ..
+            'function toggleHA() {' ..
+            '  const btn = document.getElementById("haBtn");' ..
+            '  const isOn = btn.textContent.includes("ON");' ..
+            '  const prefix = document.getElementById("haPrefix").value;' ..
+            '  if (prefix && prefix !== "homeassistant") {' ..
+            '    fetch("cm?cmnd=EweHAPrefix "+prefix).then(() => {' ..
+            '      fetch("cm?cmnd=EweHADiscovery "+(isOn ? "OFF" : "ON"))' ..
+            '        .then(() => window.location.reload());' ..
+            '    });' ..
+            '  } else {' ..
+            '    fetch("cm?cmnd=EweHADiscovery "+(isOn ? "OFF" : "ON"))' ..
+            '      .then(() => window.location.reload());' ..
+            '  }' ..
+            '}' ..
             'function updateAlias(deviceId) {' ..
             '  const alias = document.getElementById("alias_"+deviceId).value;' ..
             '  fetch("cm?cmnd=EweAlias "+deviceId+" "+alias)' ..
@@ -663,6 +936,7 @@ class ewe_remote : Driver
             '}' ..
             'function addBinding(deviceId, btn) {' ..
             '  const relay = document.getElementById("relay"+btn+"_"+deviceId).value;' ..
+            '  const action = document.getElementById("action"+btn+"_"+deviceId).value;' ..
             '  const actions = [];' ..
             '  if(document.getElementById("single"+btn+"_"+deviceId).checked) actions.push("single");' ..
             '  if(document.getElementById("double"+btn+"_"+deviceId).checked) actions.push("double");' ..
@@ -671,7 +945,7 @@ class ewe_remote : Driver
             '    alert("Please select at least one action");' ..
             '    return;' ..
             '  }' ..
-            '  fetch("cm?cmnd=EweAddBinding "+deviceId+"_"+btn+"_"+relay+"_"+actions.join(","))' ..
+            '  fetch("cm?cmnd=EweAddBinding "+deviceId+"_"+btn+"_"+relay+"_"+actions.join(",")+\"_\"+action)' ..
             '    .then(() => window.location.reload());' ..
             '}' ..
             '</script>'
@@ -752,8 +1026,8 @@ end
 
 def cmd_add_binding(cmd, idx, payload, payload_json)
     var parts = string.split(payload, '_')
-    if size(parts) != 4
-        tasmota.resp_cmnd_str('Invalid format. Use: deviceId_button_relay_actions')
+    if size(parts) != 4 && size(parts) != 5
+        tasmota.resp_cmnd_str('Invalid format. Use: deviceId_button_relay_actions_relayAction')
         return
     end
     
@@ -761,8 +1035,9 @@ def cmd_add_binding(cmd, idx, payload, payload_json)
     var button = int(parts[1])
     var relay = int(parts[2])
     var actions = string.split(parts[3], ',')
+    var relayAction = size(parts) != 5 ? 'toggle' : parts[4]
     
-    if ewe_helpers.add_binding(deviceId, button, relay, actions)
+    if ewe_helpers.add_binding(deviceId, button, relay, actions, relayAction)
         tasmota.resp_cmnd_str('Binding added')
     else
         tasmota.resp_cmnd_failed()
@@ -860,7 +1135,7 @@ def cmd_set_stats(cmd, idx, payload, payload_json)
         return
     end
     
-    var enabled = payload == '1' || payload.toupper() == 'ON'
+    var enabled = payload == '1' || string.toupper(payload) == 'ON'
     ewe_helpers.set_stats_enabled(enabled)
     tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
 end
@@ -901,12 +1176,59 @@ def cmd_set_alias(cmd, idx, payload, payload_json)
     end
 end
 
+def cmd_ha_discovery(cmd, idx, payload, payload_json)
+    if payload == ''
+        var enabled = ewe_helpers.is_ha_discovery_enabled()
+        tasmota.resp_cmnd_str(enabled ? 'ON' : 'OFF')
+        return
+    end
+    
+    var enabled = payload == '1' || string.toupper(payload) == 'ON'
+    ewe_helpers.set_ha_discovery_enabled(enabled)
+    
+    var device_count = 0
+    if enabled
+        var config = ewe_helpers.read_config()
+        if config['devices']
+            for deviceId: config['devices'].keys()
+                var device = config['devices'][deviceId]
+                var device_type = device.find('type', 'R5')
+                ewe_helpers.publish_ha_discovery_for_device(deviceId, device_type)
+                device_count += 1
+            end
+        end
+    else
+        var config = ewe_helpers.read_config()
+        if config['devices']
+            for deviceId: config['devices'].keys()
+                var device = config['devices'][deviceId]
+                var device_type = device.find('type', 'R5')
+                ewe_helpers.remove_ha_discovery_for_device(deviceId, device_type)
+                device_count += 1
+            end
+        end
+    end
+    
+    tasmota.resp_cmnd(format('{"EweHADiscovery":"%s","Devices":%d}', enabled ? 'ON' : 'OFF', device_count))
+end
+
+def cmd_ha_prefix(cmd, idx, payload, payload_json)
+    if payload == ''
+        var prefix = ewe_helpers.get_ha_discovery_prefix()
+        tasmota.resp_cmnd_str(prefix)
+        return
+    end
+    
+    ewe_helpers.set_ha_discovery_prefix(payload)
+    tasmota.resp_cmnd_str(payload)
+end
+
 if path.exists("ewe_update.be")
     load("ewe_update.be")
 end
 
+# Create global instance before adding commands that reference it
 ewe = ewe_remote()
-tasmota.add_driver(ewe)
 
 tasmota.add_cmd('EweAddDevice', cmd_add_device)
 tasmota.add_cmd('EweRemoveDevice', cmd_remove_device)
@@ -916,6 +1238,10 @@ tasmota.add_cmd('EweRemoveBinding', cmd_remove_binding)
 tasmota.add_cmd('EweShowStats', cmd_show_stats)
 tasmota.add_cmd('EweStats', cmd_set_stats)
 tasmota.add_cmd('EweAlias', cmd_set_alias)
+tasmota.add_cmd('EweHADiscovery', cmd_ha_discovery)
+tasmota.add_cmd('EweHAPrefix', cmd_ha_prefix)
+
+tasmota.add_driver(ewe)
 
 ewe.web_add_handler()
 
