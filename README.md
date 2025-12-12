@@ -167,9 +167,13 @@ EweAlias
 #### Binding Management
 
 ```
-# Add a relay binding
-EweAddBinding <deviceId>_<button>_<relay>_<actions>_relay
-# Example: EweAddBinding 5AD9E316_1_1_single,double_relay
+# Add a relay binding (relay mode)
+EweAddBinding <deviceId>_<button>_<relay>_<actions>_<relayAction>
+# relayAction can be: toggle, 1 (ON), or 0 (OFF)
+# Examples:
+#   Toggle relay 1 on single/double click: EweAddBinding 5AD9E316_1_1_single,double_toggle
+#   Turn ON relay 1 on single click: EweAddBinding 5AD9E316_1_1_single_1
+#   Turn OFF relay 2 on double click: EweAddBinding 5AD9E316_2_2_double_0
 
 # Add a dimmer binding
 EweAddBinding <deviceId>_<button>_<channel>_<actions>_dimmer_<step>_<min>_<max>
@@ -234,6 +238,37 @@ EweShowStats <deviceId>_<button>
 ```
 **Note**: Statistics are disabled by default to save memory. Use `EweStats ON` to enable them.
 
+#### Home Assistant MQTT Autodiscovery
+```
+# Enable/disable Home Assistant autodiscovery
+EweHADiscovery ON    # Enable autodiscovery and publish config for all registered devices
+EweHADiscovery OFF   # Disable autodiscovery and remove all device configs
+EweHADiscovery       # Show current state
+
+# Set custom discovery prefix (default: homeassistant)
+EweHAPrefix <prefix>
+# Example: EweHAPrefix homeassistant
+EweHAPrefix          # Show current prefix
+```
+
+When enabled, each registered remote will automatically create entities in Home Assistant:
+- **Event entities** for each button action (single, double, hold)
+- **Signal sensor** showing the BLE signal strength in dBm
+
+The entities will appear in Home Assistant with:
+- Device name: `eWeLink <type> <alias or deviceId>`
+- Manufacturer: eWeLink
+- Model: S-MATE2 or R5
+- Linked to your Tasmota device
+
+**Setup Steps**:
+1. Add and configure your remotes using `EweAddDevice`
+2. Set aliases if desired using `EweAlias`
+3. Enable autodiscovery with `EweHADiscovery ON`
+4. Devices will appear automatically in Home Assistant
+
+**Note**: Autodiscovery is disabled by default. When you enable it with `EweHADiscovery ON`, it will automatically publish the configuration for all registered devices. When you disable it with `EweHADiscovery OFF`, it will remove all device configurations from Home Assistant.
+
 ### MQTT Messages
 
 Each button press sends an MQTT message:
@@ -241,9 +276,10 @@ Each button press sends an MQTT message:
 ```json
 {
   "Button1": {
-    "Action": "simple"
+    "Action": "single"
   },
   "Signal": -90,
+  "DeviceId": "5AD9E316",
   "DeviceType": "S-MATE2",
   "Sequence": 73,
   "Timestamp": 1741982724
