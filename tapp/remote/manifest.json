@@ -1,0 +1,8 @@
+{
+  "name": "eWeLink Remote",
+  "version": "0x190C0C01",
+  "description": "eWeLink BLE remotes (S-MATE2, R5) management with relay bindings and MQTT support",
+  "author": "Flobul",
+  "min_tasmota": "0x0E060002",
+  "features": ""
+}
