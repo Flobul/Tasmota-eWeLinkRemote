@@ -17,6 +17,14 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
 
 ### Module installation:
 
+#### Tasmota Extension installation (recommended)
+   - Upload `eWeLinkRemote.tapp` or `eWeLinkRemote_Dimmer.tapp` into `/.extensions/` from **Consoles → Manage File System** (enable **Show hidden files**).
+   - Start the extension from **Tools → Extension Manager**, or restart Tasmota when autorun is enabled.
+   - The embedded `autoexec.be` follows the [Tasmota Extension lifecycle](https://tasmota.github.io/docs/Tasmota-Extension/): it loads the main module without caching it and registers the returned driver with `tasmota.add_extension()`.
+   - No additional `load()` is required in `/autoexec.be`.
+   - Use only one variant at a time.
+   - The persistent configuration remains in `/ewe_config.json`, outside the `.tapp`, so stopping or updating the extension does not remove devices and bindings.
+
 #### Manual installation 
    - Download the `ewe_remote.be` file or `ewe_remote_dimmer.be`
    - Copy it to your ESP32 via Tasmota web interface (Console -> Manage File System)
@@ -69,12 +77,13 @@ This module enables the use of eWeLink BLE remotes (SNZB-01P and R5) with Tasmot
    
    start_eweremote_setup()
    ```
-### Load on boot
+### Load on boot for a manual `.be` installation
 
-If you would like a fully berry solution to loading eWeLinkRemote, add the following line to autoexec.be
+This section is not needed when using the Extension Manager. For a manually uploaded `.be` file,
+load it directly from `/autoexec.be`:
 
    ```
-    tasmota.add_rule('System#Boot', / -> tasmota.set_timer(10000, / -> load('ewe_remote.be'))) # or ewe_remote_dimmer.be
+    load('ewe_remote.be') # or ewe_remote_dimmer.be
    ```
 
 Otherwise, you can simply make a rule:
@@ -252,14 +261,14 @@ EweHAPrefix          # Show current prefix
 ```
 
 When enabled, each registered remote will automatically create entities in Home Assistant:
-- **Event entities** for each button action (single, double, hold)
+- **One event entity per button**, exposing the `single`, `double` and `hold` event types
 - **Signal sensor** showing the BLE signal strength in dBm
 
 The entities will appear in Home Assistant with:
 - Device name: `eWeLink <type> <alias or deviceId>`
 - Manufacturer: eWeLink
 - Model: S-MATE2 or R5
-- Linked to your Tasmota device
+- Grouped in a dedicated eWeLink device
 
 **Setup Steps**:
 1. Add and configure your remotes using `EweAddDevice`
@@ -268,6 +277,12 @@ The entities will appear in Home Assistant with:
 4. Devices will appear automatically in Home Assistant
 
 **Note**: Autodiscovery is disabled by default. When you enable it with `EweHADiscovery ON`, it will automatically publish the configuration for all registered devices. When you disable it with `EweHADiscovery OFF`, it will remove all device configurations from Home Assistant.
+
+Discovery follows the MQTT topic mode configured with `EweTopicMode`. Changing the
+topic mode, an alias or the Home Assistant discovery prefix republishes the affected
+configuration automatically. After an upgrade, the configuration is republished at
+startup and after each MQTT reconnection; this also removes the obsolete per-action
+entities created by versions 0.6.1/0.7.0.
 
 ### MQTT Messages
 
@@ -286,9 +301,26 @@ Each button press sends an MQTT message:
 }
 ```
 
-### Auto-Update System
+When Home Assistant discovery is enabled, a second message dedicated to the pressed
+button is published on `<configured topic>/buttonN`. It follows the MQTT Event schema:
 
-The module includes an automatic update system that can check and install new versions.
+```json
+{
+  "event_type": "single",
+  "Signal": -90,
+  "DeviceId": "5AD9E316",
+  "DeviceType": "S-MATE2",
+  "Sequence": 73,
+  "Timestamp": 1741982724
+}
+```
+
+### Updates
+
+Extensions installed as `.tapp` are updated through Tasmota's Extension Manager or by
+replacing the `.tapp`. The legacy updater below applies only to a manual `.be`
+installation: upload `ewe_update.be` and load it from `/autoexec.be` after the main
+module, as shown by the example file in this repository.
 
 #### Update Commands
 

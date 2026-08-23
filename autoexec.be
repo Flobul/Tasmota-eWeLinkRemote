@@ -1,5 +1,7 @@
-def system_boot()
-  tasmota.set_timer(10000, / -> load('ewe_remote.be'))
-  #tasmota.set_timer(10000, / -> load('ewe_remote_dimmer.be'))
+# Manual .be installation only. A .tapp starts its embedded script itself.
+import path
+load('ewe_remote.be')
+# load('ewe_remote_dimmer.be')
+if path.exists('ewe_update.be')
+  load('ewe_update.be')
 end
-tasmota.add_rule('System#Boot', system_boot)

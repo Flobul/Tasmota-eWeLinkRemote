@@ -1,12 +1,13 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2025-12-12
-# Version 0.7.0
+# Modified by @Flobul on 2026-08-23
+# Version 0.7.7
 
 import string
 import json
 import mqtt
-import path
+
+var EWE_REMOTE_VERSION = '0.7.7'
 
 class State
     var button
@@ -27,7 +28,7 @@ class State
         self.time = 0
     end
 end
-cbuf = bytes(-64)
+var cbuf = bytes(-64)
 
 var g_state = State()
 
@@ -339,87 +340,10 @@ class ewe_helpers
         ewe_helpers.write_config(config)
     end
 
-    static def publish_ha_discovery_for_device(device_id, device_type)
-        if !ewe_helpers.is_ha_discovery_enabled() return end
-        
-        var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
-        var alias = ewe_helpers.get_device_alias(device_id)
-        var device_name = alias ? alias : device_id
-        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
-        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
-        var macFormatted = getmac(6)
-        tasmota_topic = string.replace(tasmota_topic, '%06X', macFormatted)
-        var button_actions = ['single', 'double', 'hold']
-        
-        var device_info = {
-            'identifiers': [device_id],
-            'name': format('eWeLink %s %s', device_type, device_name),
-            'model': device_type,
-            'manufacturer': 'eWeLink',
-            'via_device': tasmota_topic
-        }
-        
-        var prefix = tasmota.cmd('Prefix', true)['Prefix3']
-        var state_topic = format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
-        
-        for btn: 1..num_buttons
-            for action_idx: 0..2
-                var action = button_actions[action_idx]
-                var unique_id = format('ewelink_%s_btn%d_%s', device_id, btn, action)
-                var object_id = format('%s_button_%d_%s', device_id, btn, action)
-                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
-                
-                var config = {
-                    'name': format('Button %d %s', btn, action),
-                    'unique_id': unique_id,
-                    'state_topic': state_topic,
-                    'value_template': format('{{value_json.Button%d.Action if value_json.Button%d.Action == "%s" else ""}}', btn, btn, action),
-                    'event_types': [action],
-                    'device': device_info,
-                    'device_class': 'button'
-                }
-                
-                mqtt.publish(config_topic, json.dump(config), true)
-            end
-        end
-        
-        var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
-        var signal_config = {
-            'name': 'Signal',
-            'unique_id': format('ewelink_%s_signal', device_id),
-            'state_topic': state_topic,
-            'value_template': '{{value_json.Signal}}',
-            'unit_of_measurement': 'dBm',
-            'device_class': 'signal_strength',
-            'state_class': 'measurement',
-            'device': device_info
-        }
-        mqtt.publish(sensor_config_topic, json.dump(signal_config), true)
-    end
-
-    static def remove_ha_discovery_for_device(device_id, device_type)
-        if !ewe_helpers.is_ha_discovery_enabled() return end
-        
-        var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
-        var num_buttons = device_type == 'S-MATE2' ? 3 : 6
-        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
-        var macFormatted = getmac(6)
-        tasmota_topic = string.replace(tasmota_topic, '%06X', macFormatted)
-        var button_actions = ['single', 'double', 'hold']
-        
-        for btn: 1..num_buttons
-            for action_idx: 0..2
-                var action = button_actions[action_idx]
-                var object_id = format('%s_button_%d_%s', device_id, btn, action)
-                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
-                mqtt.publish(config_topic, '', true)
-            end
-        end
-        
-        var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
-        mqtt.publish(sensor_config_topic, '', true)
-    end
 end
+
+# Global driver instance referenced by the command callbacks below.
+var ewe = nil
 
 class ewe_remote : Driver
     static XOR_TABLE = [
@@ -433,16 +357,64 @@ class ewe_remote : Driver
     var last_data
     var button_history
     var dimmer_states
+    var ble_started
+    var ble_callback
+    var fast_loop_callback
+    var mqtt_rule_id
+    var discovery_timer_id
 
     def init()
-        import BLE
-        import cb
-        var cbp = cb.gen_cb(/svc,manu->self.ble_cb(svc,manu))
-        BLE.adv_cb(cbp,cbuf)
         self.last_data = bytes('')
         self.button_history = {}
         self.dimmer_states = {}
-        tasmota.add_fast_loop(/-> BLE.loop())
+        self.ble_started = false
+        self.ble_callback = nil
+        self.fast_loop_callback = nil
+        self.mqtt_rule_id = 'ewelink_remote_dimmer_mqtt_connected'
+        self.discovery_timer_id = 'ewelink_remote_dimmer_ha_discovery'
+        tasmota.add_rule('Mqtt#Connected', / -> self.publish_all_ha_discovery(), self.mqtt_rule_id)
+        tasmota.set_timer(3000, / -> self.publish_all_ha_discovery(), self.discovery_timer_id)
+        tasmota.add_driver(self)
+        if tasmota.is_network_up()
+            self.web_add_handler()
+        end
+    end
+
+    def start_ble()
+        if self.ble_started return end
+        try
+            import BLE
+            BLE.init()
+            import cb
+            self.ble_callback = cb.gen_cb(/svc,manu->self.ble_cb(svc,manu))
+            BLE.adv_cb(self.ble_callback,cbuf)
+            self.fast_loop_callback = /-> BLE.loop()
+            tasmota.add_fast_loop(self.fast_loop_callback)
+            self.ble_started = true
+            tasmota.log('eWeLink Remote Dimmer: écoute BLE initialisée', 3)
+        except ..
+            # MI32 initializes BLE asynchronously after extensions are loaded.
+            # every_second() retries without relying on a fixed boot delay.
+        end
+    end
+
+    def every_second()
+        if !self.ble_started
+            self.start_ble()
+        end
+    end
+
+    def unregister_commands()
+        tasmota.remove_cmd('EweAddDevice')
+        tasmota.remove_cmd('EweRemoveDevice')
+        tasmota.remove_cmd('EweTopicMode')
+        tasmota.remove_cmd('EweAddBinding')
+        tasmota.remove_cmd('EweRemoveBinding')
+        tasmota.remove_cmd('EweShowStats')
+        tasmota.remove_cmd('EweStats')
+        tasmota.remove_cmd('EweAlias')
+        tasmota.remove_cmd('EweHADiscovery')
+        tasmota.remove_cmd('EweHAPrefix')
     end
 
     def get_dimmer_state(deviceId, button, relay)
@@ -468,7 +440,12 @@ class ewe_remote : Driver
         return result
     end
 
-    def get_mqtt_topic(device_id)
+    def get_tasmota_topic()
+        var topic = tasmota.cmd('Topic', true)['Topic']
+        return string.replace(topic, '%06X', getmac(6))
+    end
+
+    def get_mqtt_topic(device_id, device_type)
         var config = ewe_helpers.get_topic_config()
         var mode = config['mode']
         var template = config['template']
@@ -485,13 +462,13 @@ class ewe_remote : Driver
         elif mode == 1
             return format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
         elif mode == 2
-            return format("%s/ewelink_%s/%s", prefix, g_state.type.tolower(), alias ? alias : device_id)
+            return format("%s/ewelink_%s/%s", prefix, device_type.tolower(), alias ? alias : device_id)
         elif mode == 3 && template != ''
             var replacements = {
                 '%prefix%': prefix,
                 '%topic%': tasmota.cmd('Topic', true)['Topic'],
                 '%deviceid%': device_id,
-                '%type%': g_state.type,
+                '%type%': device_type,
                 '%mac%': getmac(0),
                 '%shortmac%': getmac(6),
                 '%alias%': alias ? alias : device_id
@@ -505,6 +482,15 @@ class ewe_remote : Driver
         return format("%s/tasmota_ble/%s", prefix, alias ? alias : device_id)
     end
 
+    def publish_all_ha_discovery()
+        if !ewe_helpers.is_ha_discovery_enabled() return end
+        var config = ewe_helpers.read_config()
+        var devices = config.find('devices', {})
+        for device_id: devices.keys()
+            self.publish_ha_discovery(device_id, devices[device_id].find('type', 'R5'))
+        end
+    end
+
     def publish_ha_discovery(device_id, device_type)
         if !ewe_helpers.is_ha_discovery_enabled() return end
         
@@ -512,43 +498,43 @@ class ewe_remote : Driver
         var alias = ewe_helpers.get_device_alias(device_id)
         var device_name = alias ? alias : device_id
         var num_buttons = device_type == 'S-MATE2' ? 3 : 6
-        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
+        var tasmota_topic = self.get_tasmota_topic()
+        var state_topic = self.get_mqtt_topic(device_id, device_type)
         
         var device_info = {
             'identifiers': [device_id],
             'name': format('eWeLink %s %s', device_type, device_name),
             'model': device_type,
-            'manufacturer': 'eWeLink',
-            'via_device': tasmota_topic
+            'manufacturer': 'eWeLink'
         }
         
         for btn: 1..num_buttons
+            # Remove discovery entries generated by versions <= 0.7.0.
             for action_idx: 0..2
                 var action = self.button_actions[action_idx]
-                var unique_id = format('ewelink_%s_btn%d_%s', device_id, btn, action)
                 var object_id = format('%s_button_%d_%s', device_id, btn, action)
                 var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
-                
-                var state_topic = self.get_mqtt_topic(device_id)
-                
-                var config = {
-                    'name': format('Button %d %s', btn, action),
-                    'unique_id': unique_id,
-                    'state_topic': state_topic,
-                    'value_template': format('{{value_json.Button%d.Action if value_json.Button%d.Action == "%s" else ""}}', btn, btn, action),
-                    'event_types': [action],
-                    'device': device_info
-                }
-                
-                mqtt.publish(config_topic, json.dump(config), true)
+                mqtt.publish(config_topic, '', true)
             end
+
+            var button_object_id = format('%s_button_%d', device_id, btn)
+            var button_config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, button_object_id)
+            var config = {
+                'name': format('Button %d', btn),
+                'unique_id': format('ewelink_%s_btn%d', device_id, btn),
+                'state_topic': format('%s/button%d', state_topic, btn),
+                'event_types': self.button_actions,
+                'device_class': 'button',
+                'device': device_info
+            }
+            mqtt.publish(button_config_topic, json.dump(config), true)
         end
         
         var sensor_config_topic = format('%s/sensor/%s/%s_signal/config', ha_prefix, tasmota_topic, device_id)
         var signal_config = {
             'name': 'Signal',
             'unique_id': format('ewelink_%s_signal', device_id),
-            'state_topic': self.get_mqtt_topic(device_id),
+            'state_topic': state_topic,
             'value_template': '{{value_json.Signal}}',
             'unit_of_measurement': 'dBm',
             'device_class': 'signal_strength',
@@ -559,18 +545,21 @@ class ewe_remote : Driver
     end
 
     def remove_ha_discovery(device_id, device_type)
-        if !ewe_helpers.is_ha_discovery_enabled() return end
-        
         var ha_prefix = ewe_helpers.get_ha_discovery_prefix()
         var num_buttons = device_type == 'S-MATE2' ? 3 : 6
-        var tasmota_topic = tasmota.cmd('Topic', true)['Topic']
+        var tasmota_topic = self.get_tasmota_topic()
         
         for btn: 1..num_buttons
+            var object_id = format('%s_button_%d', device_id, btn)
+            var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
+            mqtt.publish(config_topic, '', true)
+
+            # Also remove the legacy entity created for each action.
             for action_idx: 0..2
                 var action = self.button_actions[action_idx]
-                var object_id = format('%s_button_%d_%s', device_id, btn, action)
-                var config_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, object_id)
-                mqtt.publish(config_topic, '', true)
+                var legacy_object_id = format('%s_button_%d_%s', device_id, btn, action)
+                var legacy_topic = format('%s/event/%s/%s/config', ha_prefix, tasmota_topic, legacy_object_id)
+                mqtt.publish(legacy_topic, '', true)
             end
         end
         
@@ -749,10 +738,19 @@ class ewe_remote : Driver
         end
 
         var msg = format(
-            '{\"Button%d\":{\"Action\":\"%s\"},\"Signal\":%d,\"DeviceType\":\"%s\",\"Sequence\":%d,\"Timestamp\":%d}',
-            result['button'], result['action'], RSSI, device_type, sequence, timestamp
+            '{\"Button%d\":{\"Action\":\"%s\"},\"Signal\":%d,\"DeviceId\":\"%s\",\"DeviceType\":\"%s\",\"Sequence\":%d,\"Timestamp\":%d}',
+            result['button'], result['action'], RSSI, result['device_id'], device_type, sequence, timestamp
         )
-        mqtt.publish(self.get_mqtt_topic(result['device_id']), msg)
+        var state_topic = self.get_mqtt_topic(result['device_id'], device_type)
+        mqtt.publish(state_topic, msg)
+
+        if ewe_helpers.is_ha_discovery_enabled()
+            var event_msg = format(
+                '{"event_type":"%s","Signal":%d,"DeviceId":"%s","DeviceType":"%s","Sequence":%d,"Timestamp":%d}',
+                result['action'], RSSI, result['device_id'], device_type, sequence, timestamp
+            )
+            mqtt.publish(format('%s/button%d', state_topic, result['button']), event_msg)
+        end
 
         tasmota.cmd(format("Event Button%d_%s", result['button'], result['action']))
     end
@@ -1161,9 +1159,7 @@ class ewe_remote : Driver
         import webserver
         webserver.on("/ewe", / -> self.page_ewe(), webserver.HTTP_GET)
     end
-end
 
-class Status_Line_right : Driver
     def web_status_line_right()
         import webserver
         webserver.content_send(format(
@@ -1180,8 +1176,33 @@ class Status_Line_right : Driver
             '</span>',
             0xAAAAAA,
             '',
-            'eWeLink-Remote'
+            format('eWeLink-Remote Dimmer v%s', EWE_REMOTE_VERSION)
         ))
+    end
+
+    def unload()
+        import webserver
+        if self.ble_started
+            import BLE
+            BLE.adv_cb(nil)
+            if self.fast_loop_callback != nil
+                tasmota.remove_fast_loop(self.fast_loop_callback)
+            end
+        end
+        tasmota.remove_rule('Mqtt#Connected', self.mqtt_rule_id)
+        tasmota.remove_timer(self.discovery_timer_id)
+        self.unregister_commands()
+        webserver.remove_route('/ewe')
+        tasmota.remove_driver(self)
+        self.last_data = nil
+        self.button_history = nil
+        self.dimmer_states = nil
+        self.ble_started = false
+        self.ble_callback = nil
+        self.fast_loop_callback = nil
+        self.mqtt_rule_id = nil
+        self.discovery_timer_id = nil
+        ewe = nil
     end
 end
 
@@ -1209,6 +1230,9 @@ def cmd_add_device(cmd, idx, payload, payload_json)
     deviceId = string.split(deviceId, '[^0-9A-Fa-f]')[0]
     
     ewe_helpers.add_device(deviceId)
+    var device_type = g_state.type
+    if !device_type device_type = 'R5' end
+    ewe.publish_ha_discovery(deviceId, device_type)
     tasmota.resp_cmnd_str(deviceId)
 end
 
@@ -1327,6 +1351,13 @@ def cmd_set_topic_mode(cmd, idx, payload, payload_json)
     end
     
     ewe_helpers.set_topic_config(mode, template)
+    if ewe_helpers.is_ha_discovery_enabled()
+        var config = ewe_helpers.read_config()
+        var devices = config.find('devices', {})
+        for deviceId: devices.keys()
+            ewe.publish_ha_discovery(deviceId, devices[deviceId].find('type', 'R5'))
+        end
+    end
     tasmota.resp_cmnd(format("{\"Mode\":%d,\"Template\":\"%s\"}", mode, template))
 end
 
@@ -1402,6 +1433,9 @@ def cmd_set_alias(cmd, idx, payload, payload_json)
     var alias = parts[1]
     
     if ewe_helpers.set_device_alias(deviceId, alias)
+        var config = ewe_helpers.read_config()
+        var device_type = config['devices'][deviceId].find('type', 'R5')
+        ewe.publish_ha_discovery(deviceId, device_type)
         var response = {
             "DeviceId": deviceId,
             "Alias": alias
@@ -1420,29 +1454,28 @@ def cmd_ha_discovery(cmd, idx, payload, payload_json)
     end
     
     var enabled = payload == '1' || string.toupper(payload) == 'ON'
-    ewe_helpers.set_ha_discovery_enabled(enabled)
-    
     var device_count = 0
+    var config = ewe_helpers.read_config()
     if enabled
-        var config = ewe_helpers.read_config()
+        ewe_helpers.set_ha_discovery_enabled(true)
         if config['devices']
             for deviceId: config['devices'].keys()
                 var device = config['devices'][deviceId]
                 var device_type = device.find('type', 'R5')
-                ewe_helpers.publish_ha_discovery_for_device(deviceId, device_type)
+                ewe.publish_ha_discovery(deviceId, device_type)
                 device_count += 1
             end
         end
     else
-        var config = ewe_helpers.read_config()
         if config['devices']
             for deviceId: config['devices'].keys()
                 var device = config['devices'][deviceId]
                 var device_type = device.find('type', 'R5')
-                ewe_helpers.remove_ha_discovery_for_device(deviceId, device_type)
+                ewe.remove_ha_discovery(deviceId, device_type)
                 device_count += 1
             end
         end
+        ewe_helpers.set_ha_discovery_enabled(false)
     end
     
     tasmota.resp_cmnd(format('{"EweHADiscovery":"%s","Devices":%d}', enabled ? 'ON' : 'OFF', device_count))
@@ -1455,17 +1488,26 @@ def cmd_ha_prefix(cmd, idx, payload, payload_json)
         return
     end
     
+    var enabled = ewe_helpers.is_ha_discovery_enabled()
+    var config = ewe_helpers.read_config()
+    if enabled && config['devices']
+        for deviceId: config['devices'].keys()
+            ewe.remove_ha_discovery(deviceId, config['devices'][deviceId].find('type', 'R5'))
+        end
+    end
+
     ewe_helpers.set_ha_discovery_prefix(payload)
+
+    if enabled && config['devices']
+        for deviceId: config['devices'].keys()
+            ewe.publish_ha_discovery(deviceId, config['devices'][deviceId].find('type', 'R5'))
+        end
+    end
     tasmota.resp_cmnd_str(payload)
 end
 
-if path.exists("ewe_update.be")
-    load("ewe_update.be")
-end
-
-# Create global instance before adding commands that reference it
+# Instantiate and return the extension tracked by tasmota.add_extension().
 ewe = ewe_remote()
-
 tasmota.add_cmd('EweAddDevice', cmd_add_device)
 tasmota.add_cmd('EweRemoveDevice', cmd_remove_device)
 tasmota.add_cmd('EweTopicMode', cmd_set_topic_mode)
@@ -1476,10 +1518,4 @@ tasmota.add_cmd('EweStats', cmd_set_stats)
 tasmota.add_cmd('EweAlias', cmd_set_alias)
 tasmota.add_cmd('EweHADiscovery', cmd_ha_discovery)
 tasmota.add_cmd('EweHAPrefix', cmd_ha_prefix)
-
-tasmota.add_driver(ewe)
-
-ewe.web_add_handler()
-
-eweRemoteStatus = Status_Line_right()
-tasmota.add_driver(eweRemoteStatus)
+return ewe
