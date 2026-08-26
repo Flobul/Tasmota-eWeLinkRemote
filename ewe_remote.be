@@ -1,13 +1,13 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2026-08-23
-# Version 0.6.8
+# Modified by @Flobul on 2026-08-26
+# Version 0.6.9
 
 import string
 import json
 import mqtt
 
-var EWE_REMOTE_VERSION = '0.6.8'
+var EWE_REMOTE_VERSION = '0.6.9'
 
 class State
     var button
@@ -549,12 +549,21 @@ class ewe_remote : Driver
     end
 
     def ble_cb(svc,manu)
-        if cbuf[0..5] != bytes("665544332211") return end
-        var payload = cbuf[9..(cbuf[8]+8)]
-        if payload == self.last_data return end
+        # fast_loop callbacks must never propagate an exception: doing so can
+        # leave BLE.loop() in an invalid state until the next restart.
+        try
+            if cbuf[0..5] != bytes("665544332211") return end
+            var device_type = self.types.find(cbuf[22], nil)
+            if device_type == nil return end
 
-        self.last_data = payload
-        self.parse(payload, (255 - cbuf[7]) * -1, self.types[cbuf[22]], cbuf[24])
+            var payload = cbuf[9..(cbuf[8]+8)]
+            if payload == self.last_data return end
+
+            self.last_data = payload
+            self.parse(payload, (255 - cbuf[7]) * -1, device_type, cbuf[24])
+        except .. as e
+            tasmota.log(format('eWeLink Remote: erreur callback BLE: %s', e), 2)
+        end
     end
 
     def parse(d, RSSI, device_type, sequence)
@@ -578,10 +587,17 @@ class ewe_remote : Driver
             var power = tasmota.get_power()
             if power != nil
                 for binding: bindings
-                    if binding['actions'].find(result['action']) != nil
-                        if binding['relay'] <= size(power)
-                            var relayAction = binding['relayAction'] != nil ? binding['relayAction'] : 'toggle'
-                            tasmota.cmd(format('Power%d %s', binding['relay'], relayAction))
+                    if isinstance(binding, map)
+                        var actions = binding.find('actions', [])
+                        var relay = binding.find('relay', 0)
+                        if isinstance(actions, list) && actions.find(result['action']) != nil
+                            if relay >= 1 && relay <= size(power)
+                                # Bindings created by older versions do not
+                                # necessarily contain relayAction.
+                                var relayAction = binding.find('relayAction', 'toggle')
+                                if relayAction == nil relayAction = 'toggle' end
+                                tasmota.cmd(format('Power%d %s', relay, relayAction))
+                            end
                         end
                     end
                 end
@@ -834,7 +850,7 @@ class ewe_remote : Driver
                             col_button_success,
                             col_button_delete,
                             col_button_success,
-                            binding['relayAction'] == '1' ? 'ON' : binding['relayAction'] == '0' ? 'OFF' : 'Toggle',
+                            binding.find('relayAction', 'toggle') == '1' ? 'ON' : binding.find('relayAction', 'toggle') == '0' ? 'OFF' : 'Toggle',
                             binding['relay'],
                             binding['actions'].concat(','),
                             deviceId, btn, binding['relay']

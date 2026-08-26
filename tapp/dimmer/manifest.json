@@ -1,6 +1,6 @@
 {
   "name": "eWeLink Remote Dimmer",
-  "version": "0x1A081707",
+  "version": "0x1A081A08",
   "description": "eWeLink BLE remotes (S-MATE2, R5) management with dimmer control and MQTT support",
   "author": "Flobul",
   "min_tasmota": "0x0E060002",

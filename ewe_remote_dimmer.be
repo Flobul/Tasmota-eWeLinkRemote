@@ -1,13 +1,13 @@
 # This code is for the eWeLink BLE remote control
 # Created by @Flobul on 2025-03-10
-# Modified by @Flobul on 2026-08-23
-# Version 0.7.7
+# Modified by @Flobul on 2026-08-26
+# Version 0.7.8
 
 import string
 import json
 import mqtt
 
-var EWE_REMOTE_VERSION = '0.7.7'
+var EWE_REMOTE_VERSION = '0.7.8'
 
 class State
     var button
@@ -587,12 +587,21 @@ class ewe_remote : Driver
     end
 
     def ble_cb(svc,manu)
-        if cbuf[0..5] != bytes("665544332211") return end
-        var payload = cbuf[9..(cbuf[8]+8)]
-        if payload == self.last_data return end
+        # fast_loop callbacks must never propagate an exception: doing so can
+        # leave BLE.loop() in an invalid state until the next restart.
+        try
+            if cbuf[0..5] != bytes("665544332211") return end
+            var device_type = self.types.find(cbuf[22], nil)
+            if device_type == nil return end
 
-        self.last_data = payload
-        self.parse(payload, (255 - cbuf[7]) * -1, self.types[cbuf[22]], cbuf[24])
+            var payload = cbuf[9..(cbuf[8]+8)]
+            if payload == self.last_data return end
+
+            self.last_data = payload
+            self.parse(payload, (255 - cbuf[7]) * -1, device_type, cbuf[24])
+        except .. as e
+            tasmota.log(format('eWeLink Remote Dimmer: erreur callback BLE: %s', e), 2)
+        end
     end
 
     def handle_dimmer(binding, result, current_value, dimmer_params)
@@ -687,7 +696,10 @@ class ewe_remote : Driver
                         var output_type = binding.find('output_type', 'relay')
                         if output_type == 'relay'
                             if binding['relay'] <= size(power)
-                                var relayAction = binding['relayAction'] != nil ? binding['relayAction'] : 'toggle'
+                                # Bindings created by older versions do not
+                                # necessarily contain relayAction.
+                                var relayAction = binding.find('relayAction', 'toggle')
+                                if relayAction == nil relayAction = 'toggle' end
                                 tasmota.cmd(format('Power%d %s', binding['relay'], relayAction))
                             end
                         elif output_type == 'dimmer'
